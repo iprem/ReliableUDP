@@ -37,7 +37,8 @@ struct udp_sock_info{
 #define MAX_IF_NUM 10
 #define PREM_PORT 2038
 #define LOCALHOST_PORT 8888
-
+#define TRUE 1
+#define FALSE 0
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
 
@@ -47,11 +48,16 @@ int main(int argc, char ** argv){
   int * sock_fd_array_iter = sock_fd_array;
   struct udp_sock_info udp_sock_info_arr[MAX_IF_NUM];
   struct udp_sock_info  * udp_sock_info_iter  = udp_sock_info_arr; 
+  struct sockaddr_in client, server, server_assigned;
   fd_set rset;
-  int port, window, i, max;
+  int port, window, i, max, local, connfd;
+  const int on = 1;
   FILE *fp;
   pid_t child;
-
+  in_addr_t ip_dest, subnet_dest;
+  socklen_t addr_len;
+  char recv_buf[1024];
+  
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
 
   //initialize so we can loop and print later
@@ -59,6 +65,8 @@ int main(int argc, char ** argv){
     (*udp_sock_info_iter).sockfd = -1;
     udp_sock_info_iter++;
   }
+  udp_sock_info_iter = udp_sock_info_arr;
+
 
   if(argc != 2)	err_quit("Usage: ./server server.in");
   
@@ -104,9 +112,44 @@ int main(int argc, char ** argv){
     }
 
     if(Fork() == 0){
-      while
+      while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
+	{
+	  udp_sock_info_iter++;
+	}
+      subnet_dest = udp_sock_info_iter->subnet_mask;
+      ip_dest = udp_sock_info_iter->ifi_addr.sin_addr.s_addr;
 
+      recvfrom(*sock_fd_array_iter, recv_buf, 1024,0, (SA *) &client, sizeof(client));
+      if (subnet_dest == subnet_dest & client.sin_addr.s_addr){
+	local = TRUE;
+	printf("Client is local. \n");
+      }
+      else{
+	local= FALSE;
+	printf("Client is not local. \n");
+      }
+  
+      
+      connfd = Socket(AF_INET, SOCK_DGRAM, 0);
+      Setsockopt(connfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+      server.sin_addr.s_addr = udp_sock_info_iter->ifi_addr.sin_addr.s_addr;
+      server.sin_port = 0;
+      server.sin_family = AF_INET;
+      Bind(connfd, (SA * ) &server, sizeof(server));
+
+      getsockname(connfd, (SA *) &server_assigned, &addr_len);
+      char server_ip_addr[40];
+      inet_ntop(AF_INET, &server_assigned.sin_addr.s_addr, server_ip_addr, 40);
+      printf("IP address after bind: %s \n", server_ip_addr);
+      printf("Port after bind: &d \n", ntohs(server_assigned.sin_port));
+
+      //reset for if statement clause
+      udp_sock_info_iter = udp_sock_info_arr;
+      
     }
+
+    //for while loop
+    sock_fd_array_iter = sock_fd_array;
   }
 
 
