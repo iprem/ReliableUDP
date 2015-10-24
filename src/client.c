@@ -122,7 +122,12 @@ int main(int argc, char **argv){
    	Signal(SIGALRM, recvfrom_alarm);
 	srand(seed);	/*Initialize random number generator*/
 		
-    L1:	Send(sockfd, file, strlen(file), 0);   	
+    L1:	if(((rand() % 100)/100.0) > p )
+		Send(sockfd, file, strlen(file), 0);
+	else{
+		printf("\n The packet has been dropped. Retrying.. \n");
+		goto L1;
+	}
 	alarm(2);	/*Set timeout as 2 secs*/
 	for ( ; ;){
 		FD_SET(sockfd, &rset);
@@ -142,6 +147,7 @@ int main(int argc, char **argv){
 		}
 		if(FD_ISSET(pipefd[0], &rset)){
 			Read(pipefd[0], &n, 1);		/*timer expired*/
+			printf("\nPacket lost!! Resending packet..\n");
 			goto L1;			/*Send file name again*/
 		}	
 	}
