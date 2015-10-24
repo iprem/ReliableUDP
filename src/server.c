@@ -27,8 +27,8 @@ struct udp_sock_info{
    */
 
   int sockfd;
-  struct sockaddr * ifi_addr;    //IP address bound to the socket
-  struct sockaddr * ifi_ntmaddr; //network mask for the IP address
+  struct sockaddr_in ifi_addr;    //IP address bound to the socket
+  struct sockaddr_in ifi_ntmaddr; //network mask for the IP address
   in_addr_t subnet_mask;        //subnet address (obtained by doing a bit-wise and between the IP address and its
                                 //network mask)
 
@@ -40,7 +40,6 @@ struct udp_sock_info{
 
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
-void bind_sock2(int * arr, struct udp_sock_info * sock_info);
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
@@ -49,7 +48,9 @@ int main(int argc, char ** argv){
   struct udp_sock_info udp_sock_info_arr[MAX_IF_NUM];
   struct udp_sock_info  * udp_sock_info_iter  = udp_sock_info_arr; 
   fd_set rset;
-  int i, max;
+  int port, window, i, max;
+  FILE *fp;
+  pid_t child;
 
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
 
@@ -59,44 +60,62 @@ int main(int argc, char ** argv){
     udp_sock_info_iter++;
   }
 
+  if(argc != 2)	err_quit("Usage: ./server server.in");
+  
+  fp = fopen(argv[1],"r");
+  
+  if(fp == NULL){
+    printf("Error opening file\n");
+    exit(1);
+  }
+  
+
   //read arguments from server.in
+  if(fscanf(fp,"%d\n",&port) == 0)	err_quit("No port number found in the file\n");
+  if(fscanf(fp,"%d\n",&window) == 0)	err_quit("No window size found in the file\n");
   
   //bind all ip addrs to diff sockets. 
   //we only want unicast addrs. Get_ifi_info gets all interfaces
   bind_sock(sock_fd_array, udp_sock_info_arr);
-  //print_sock_info(udp_sock_info_arr, MAX_IF_NUM);
+  print_sock_info(udp_sock_info_arr, MAX_IF_NUM);
 
 
-  //GONNA WANNA DO THIS IN A LOOP SO MAKE SURE TO CLEAR THE RSET AT THE BOTTOM
-  FD_ZERO(&rset);
-  // stdout is 2
-  max = 2;
-  while((*sock_fd_array_iter) != -1)
-    {
-      if(*sock_fd_array_iter > max){
-	max = *sock_fd_array_iter;
-      }
+  while(1){
+
+    FD_ZERO(&rset);
+    // stdout is 2
+    max = 2;
+    while((*sock_fd_array_iter) != -1)
+      {
+	if(*sock_fd_array_iter > max){
+	  max = *sock_fd_array_iter;
+	}
       FD_SET(*sock_fd_array_iter, &rset);
       sock_fd_array_iter++;
-    }
-  sock_fd_array_iter = sock_fd_array;
-
-  //not sure how pselect and signal race are related
-  //read in book
-  pselect(max + 1, &rset, 0, 0, 0, 0 );
-  
-  while(!FD_ISSET(*sock_fd_array_iter, &rset)){
+      }
+    sock_fd_array_iter = sock_fd_array;
+    
+    //not sure how pselect and signal race are related
+    //read in book
+    pselect(max + 1, &rset, 0, 0, 0, 0 );
+    
+    while(!FD_ISSET(*sock_fd_array_iter, &rset)){
     sock_fd_array_iter++;
-  }
-  
-  printf("It worked! \n");
-  char huge_buf[1024];
-  Recv(*sock_fd_array_iter, huge_buf, 1024, 0);
-  printf("%s", huge_buf);
+    }
 
-  //inet_pton(AF_INET, "130.245.1.116", &(si->sin_addr.s_addr));
-  //inet_pton(AF_INET, "130.245.1.181", &(si->sin_addr.s_addr));
-  //inet_pton(AF_INET, "127.0.0.1", &(si->sin_addr.s_addr));
+    if(Fork() == 0){
+      while
+
+    }
+  }
+
+
+    /*    
+	  printf("It worked! \n");
+	  char huge_buf[1024];
+	  Recv(*sock_fd_array_iter, huge_buf, 1024, 0);
+	  printf("%s", huge_buf);
+    */
 
   return 0;    
 }
@@ -112,6 +131,11 @@ void bind_sock(int * arr, struct udp_sock_info * sock_info){
   const int		on = 1;
   int sockfd;
 
+  printf("\n");
+  printf("Binding addresses.... \n");
+  printf("============================================================ \n");
+    
+
   for (ifihead = ifi = Get_ifi_info_plus(AF_INET, 1);
        ifi != NULL; ifi = ifi->ifi_next) {
     
@@ -123,14 +147,22 @@ void bind_sock(int * arr, struct udp_sock_info * sock_info){
     arr++;
 
     Setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-    
+
+    //Create sockaddr to bind
     si = (struct sockaddr_in *) ifi->ifi_addr;
     si->sin_family = AF_INET;
     si->sin_port = htons(PREM_PORT);
     Bind(sockfd, (SA *) si, sizeof(*si));
     printf("bound %s\n", Sock_ntop((SA *) si, sizeof(*si)));
 
-    
+    //Add to udp_sock_info array
+    sock_info->sockfd = sockfd;
+    sock_info->ifi_addr = *si;
+    sock_info->ifi_ntmaddr = *((struct sockaddr_in *) ifi->ifi_ntmaddr);
+    sock_info->subnet_mask =     sock_info->ifi_addr.sin_addr.s_addr & sock_info->ifi_ntmaddr.sin_addr.s_addr;      
+    sock_info++;
+
+    /*
     printf("%s: ", ifi->ifi_name);
     if (ifi->ifi_index != 0)
       printf("(%d) ", ifi->ifi_index);
@@ -158,63 +190,24 @@ void bind_sock(int * arr, struct udp_sock_info * sock_info){
     if ( (sa = ifi->ifi_ntmaddr) != NULL)
       printf("  network mask: %s\n",
 	     Sock_ntop_host(sa, sizeof(*sa)));
+    */
     
   }
+  //Put boundary of -1 in array so that we know where legitimate file descriptors end
   *arr = -1;
   free_ifi_info_plus(ifihead);
 }
 
-void bind_sock2(int * arr, struct udp_sock_info * sock_info){
-  struct sockaddr_in	*sa;
-  struct ifi_info       *ifi, *ifihead;
-  const int		on = 1;
-  int sockfd;
-
-
-for (ifihead = ifi = Get_ifi_info(AF_INET, 1); ifi != NULL; ifi = ifi->ifi_next)
-    {	
-    
-      /*4bind unicast address */
-      sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
-      
-      // store fd in int array
-      *arr = sockfd;
-      arr++;
-      
-      Setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-    
-      sa = (struct sockaddr_in *) ifi->ifi_addr;
-      sa->sin_family = AF_INET;
-      sa->sin_port = htons(SERV_PORT);
-      Bind(sockfd, (SA *) sa, sizeof(*sa));
-      printf("bound %s\n", Sock_ntop((SA *) sa, sizeof(*sa)));
-      
-      sock_info->sockfd = sockfd;
-      sock_info->ifi_addr =  malloc(sizeof(struct sockaddr_in));
-      *(sock_info->ifi_addr) =  *(ifi->ifi_addr);
-      
-      //printf("  IP addr: %s\n",
-      //     Sock_ntop_host(sock_info->ifi_addr, sizeof(struct sockaddr_in)));
-
-      sock_info->ifi_ntmaddr = malloc(sizeof(struct sockaddr_in));
-      *(sock_info->ifi_ntmaddr) =  *(ifi->ifi_ntmaddr);
-
-      
-      int ip_addr = 0;
-      ip_addr = ((struct sockaddr_in *)sock_info->ifi_addr)->sin_addr.s_addr;
-      int net_mask = 0;
-      net_mask = ((struct sockaddr_in *)sock_info->ifi_ntmaddr)->sin_addr.s_addr;
-      sock_info->subnet_mask = ip_addr & net_mask;
-  }
-  
-  free_ifi_info_plus(ifihead);
-}
 
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size){
   int i;
   char ip_presentation [40];
   char net_mask_presentation[40];
   char sub_mask_presentation[40];
+  
+  printf("\n");
+  printf("Recorded Data \n");
+  printf("============================================================ \n");
 
   for(i = 0; i < buff_size; i++)
     {
@@ -223,13 +216,18 @@ void print_sock_info(struct udp_sock_info * sock_info, int buff_size){
       }
       else{
 	// IP address, network mask, and subnet address
-	inet_ntop(AF_INET, &((struct sockaddr_in *)sock_info->ifi_addr)->sin_addr, ip_presentation, sizeof(ip_presentation));
-	inet_ntop(AF_INET, &((struct sockaddr_in *)sock_info->ifi_ntmaddr)->sin_addr, net_mask_presentation, sizeof(net_mask_presentation));
+	
+	inet_ntop(AF_INET, &(sock_info->ifi_addr.sin_addr.s_addr), ip_presentation, sizeof(ip_presentation));
+	inet_ntop(AF_INET, &(sock_info->ifi_ntmaddr.sin_addr.s_addr), net_mask_presentation, sizeof(net_mask_presentation));
 	inet_ntop(AF_INET, &(sock_info->subnet_mask), sub_mask_presentation, sizeof(sub_mask_presentation));
 	
+
+	printf("File Descriptor: %d \n", sock_info->sockfd );
 	printf("IP Addr: %s \n", ip_presentation);
 	printf("Net Mask Addr: %s \n", net_mask_presentation);
 	printf("Subnet Mask Addr: %s \n", sub_mask_presentation);
+
+	printf("\n");
 
 	sock_info++;
       }
