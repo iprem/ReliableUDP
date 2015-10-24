@@ -35,16 +35,23 @@ struct udp_sock_info{
 };
 
 #define MAX_IF_NUM 10
+#define PREM_PORT 2038
+#define LOCALHOST_PORT 8888
 
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
+void bind_sock2(int * arr, struct udp_sock_info * sock_info);
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
   int sock_fd_array[MAX_IF_NUM];
+  int * sock_fd_array_iter = sock_fd_array;
   struct udp_sock_info udp_sock_info_arr[MAX_IF_NUM];
   struct udp_sock_info  * udp_sock_info_iter  = udp_sock_info_arr; 
-  int i;
+  fd_set rset;
+  int i, max;
+
+  memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
 
   //initialize so we can loop and print later
   for(i = 0; i < MAX_IF_NUM; i++){
@@ -53,33 +60,119 @@ int main(int argc, char ** argv){
   }
 
   //read arguments from server.in
-
   
   //bind all ip addrs to diff sockets. 
   //we only want unicast addrs. Get_ifi_info gets all interfaces
   bind_sock(sock_fd_array, udp_sock_info_arr);
-  print_sock_info(udp_sock_info_arr, MAX_IF_NUM);
+  //print_sock_info(udp_sock_info_arr, MAX_IF_NUM);
 
+
+  //GONNA WANNA DO THIS IN A LOOP SO MAKE SURE TO CLEAR THE RSET AT THE BOTTOM
+  FD_ZERO(&rset);
+  // stdout is 2
+  max = 2;
+  while((*sock_fd_array_iter) != -1)
+    {
+      if(*sock_fd_array_iter > max){
+	max = *sock_fd_array_iter;
+      }
+      FD_SET(*sock_fd_array_iter, &rset);
+      sock_fd_array_iter++;
+    }
+  sock_fd_array_iter = sock_fd_array;
+
+  //not sure how pselect and signal race are related
+  //read in book
+  pselect(max + 1, &rset, 0, 0, 0, 0 );
   
-  //you can see how it was printed in prinfo_plus.c
+  while(!FD_ISSET(*sock_fd_array_iter, &rset)){
+    sock_fd_array_iter++;
+  }
+  
+  printf("It worked! \n");
+  char huge_buf[1024];
+  Recv(*sock_fd_array_iter, huge_buf, 1024, 0);
+  printf("%s", huge_buf);
+
+  //inet_pton(AF_INET, "130.245.1.116", &(si->sin_addr.s_addr));
+  //inet_pton(AF_INET, "130.245.1.181", &(si->sin_addr.s_addr));
+  //inet_pton(AF_INET, "127.0.0.1", &(si->sin_addr.s_addr));
 
   return 0;    
 }
 
+
 void bind_sock(int * arr, struct udp_sock_info * sock_info){
+
+  struct ifi_info	*ifi, *ifihead;
+  struct sockaddr	*sa;
+  struct sockaddr_in    *si;
+  u_char		*ptr;
+  int		i, family, doaliases;
+  const int		on = 1;
+  int sockfd;
+
+  for (ifihead = ifi = Get_ifi_info_plus(AF_INET, 1);
+       ifi != NULL; ifi = ifi->ifi_next) {
+    
+
+    sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
+    
+    // store fd in int array
+    *arr = sockfd;
+    arr++;
+
+    Setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    
+    si = (struct sockaddr_in *) ifi->ifi_addr;
+    si->sin_family = AF_INET;
+    si->sin_port = htons(PREM_PORT);
+    Bind(sockfd, (SA *) si, sizeof(*si));
+    printf("bound %s\n", Sock_ntop((SA *) si, sizeof(*si)));
+
+    
+    printf("%s: ", ifi->ifi_name);
+    if (ifi->ifi_index != 0)
+      printf("(%d) ", ifi->ifi_index);
+    printf("<");
+    if (ifi->ifi_flags & IFF_UP)			printf("UP ");
+    if (ifi->ifi_flags & IFF_LOOPBACK)		printf("LOOP ");
+    if (ifi->ifi_flags & IFF_POINTOPOINT)	printf("P2P ");
+    printf(">\n");
+
+    if ( (i = ifi->ifi_hlen) > 0) {
+      ptr = ifi->ifi_haddr;
+      do {
+	printf("%s%x", (i == ifi->ifi_hlen) ? "  " : ":", *ptr++);
+      } while (--i > 0);
+      printf("\n");
+      }
+    if (ifi->ifi_mtu != 0)
+      printf("  MTU: %d\n", ifi->ifi_mtu);
+    
+    if ( (sa = ifi->ifi_addr) != NULL)
+      printf("  IP addr: %s\n",
+	     Sock_ntop_host(sa, sizeof(*sa)));
+    
+    
+    if ( (sa = ifi->ifi_ntmaddr) != NULL)
+      printf("  network mask: %s\n",
+	     Sock_ntop_host(sa, sizeof(*sa)));
+    
+  }
+  *arr = -1;
+  free_ifi_info_plus(ifihead);
+}
+
+void bind_sock2(int * arr, struct udp_sock_info * sock_info){
   struct sockaddr_in	*sa;
   struct ifi_info       *ifi, *ifihead;
   const int		on = 1;
   int sockfd;
 
 
-  for (ifihead = ifi = Get_ifi_info(AF_INET, 1); ifi != NULL; ifi = ifi->ifi_next) 
-    {
-
-      if(!(ifi->ifi_flags & IFF_UP) && !(ifi->ifi_flags & IFF_LOOPBACK)){
-	continue;
-      }
-	
+for (ifihead = ifi = Get_ifi_info(AF_INET, 1); ifi != NULL; ifi = ifi->ifi_next)
+    {	
     
       /*4bind unicast address */
       sockfd = Socket(AF_INET, SOCK_DGRAM, 0);
@@ -106,6 +199,7 @@ void bind_sock(int * arr, struct udp_sock_info * sock_info){
       sock_info->ifi_ntmaddr = malloc(sizeof(struct sockaddr_in));
       *(sock_info->ifi_ntmaddr) =  *(ifi->ifi_ntmaddr);
 
+      
       int ip_addr = 0;
       ip_addr = ((struct sockaddr_in *)sock_info->ifi_addr)->sin_addr.s_addr;
       int net_mask = 0;
