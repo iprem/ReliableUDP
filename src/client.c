@@ -20,7 +20,7 @@ int main(int argc, char **argv){
 	u_char		*ptr;
 	doaliases = DOALIASES;
 	fd_set rset;
-	float prob;
+	float prob,p;
 	int bool = 0;
 	struct msghdr msg;
 	uint32_t serverip, clientip[MAXALIASES], netmask[MAXALIASES];
@@ -122,10 +122,12 @@ int main(int argc, char **argv){
    	Signal(SIGALRM, recvfrom_alarm);
 	srand(seed);	/*Initialize random number generator*/
 		
-    L1:	if(((rand() % 100)/100.0) > p )
+    L1:	if(((p = (rand() % 100)/100.0)) > prob ){
+		printf("\n%f \t %f\n", p, prob); 
 		Send(sockfd, file, strlen(file), 0);
+	}
 	else{
-		printf("\n The packet has been dropped. Retrying.. \n");
+		printf("\nThe packet has been dropped. Retrying... \n");
 		goto L1;
 	}
 	alarm(2);	/*Set timeout as 2 secs*/
@@ -140,9 +142,9 @@ int main(int argc, char **argv){
 		}
 		if(FD_ISSET(sockfd, &rset)){
 			len = servlen;
-			n = recv(sockfd, buff, len, 0);		/*Initial ACK received*/
+			n = Recv(sockfd, buff, len, 0);		/*Initial ACK received*/
 			buff[n] = 0;
-			printf("Acknowledgement of file name transfer received\n");
+			printf("Acknowledgement of file name transfer received \n");
 			break;
 		}
 		if(FD_ISSET(pipefd[0], &rset)){
