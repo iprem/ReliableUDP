@@ -4,6 +4,7 @@
 #define SERVER_PORT 2038	/*Change server port here*/
 #define DOALIASES 1
 #define MAXLENGTH 30
+#define RETRY 3
 
 void print(struct sockaddr_in *servaddr);
 uint32_t parseIPV4string(char* ipAddress);	/*Function for parsing the IP address*/
@@ -13,7 +14,7 @@ static int pipefd[2];
 
 int main(int argc, char **argv){
 	
-	int sockfd, port, win_size, seed, mean, doaliases, i=0, family, n, len, servlen, maxfd1;
+	int sockfd, sockfd2, port, win_size, seed, mean, doaliases, i=0, family, n, serv_port, len, servlen, maxfd1;
 	const int on = 1;
 	struct ifi_info *ifi;
 	struct sockaddr	*sa;
@@ -47,7 +48,7 @@ int main(int argc, char **argv){
 	if(fscanf(fp,"%f\n",&prob) == 0)	err_quit("No value for probablity of datagram loss found\n");
 	if(fscanf(fp,"%d\n",&mean) == 0)	err_quit("No mean controlling rate found\n");
 	
-	if(prob<0.0 || prob>1.0)	err_quit("Probability should be in range[0,1]\n");
+	if(prob<0.0 || prob>1.0)		err_quit("Probability should be in range[0,1]\n");
 	if( (win_size < 0) || (mean < 0) )	err_quit("Window size or mean controlling rate should be positive\n");
 	
 	//print(&servaddr);
@@ -121,8 +122,13 @@ int main(int argc, char **argv){
 	
    	Signal(SIGALRM, recvfrom_alarm);
 	srand(seed);	/*Initialize random number generator*/
+	i = 0;
 		
-    L1:	if(((p = (rand() % 100)/100.0)) > prob ){
+    L1:	if( i > RETRY ){
+		printf("\nServer not responding...Giving up !!!\n");
+		exit(1);
+	}
+	if((p = (rand() % 100)/100.0) > prob ){
 		printf("\n%f \t %f\n", p, prob); 
 		Send(sockfd, file, strlen(file), 0);
 	}
@@ -142,14 +148,23 @@ int main(int argc, char **argv){
 		}
 		if(FD_ISSET(sockfd, &rset)){
 			len = servlen;
-			n = Recv(sockfd, buff, len, 0);		/*Initial ACK received*/
-			buff[n] = 0;
-			printf("Acknowledgement of file name transfer received \n");
+			n = Recv(sockfd, &serv_port, len, 0);		/*Port number received*/
+			//serv_port = ntohs(serv_port);
+			printf("Port number received: %d\n",serv_port);
+			printf("Binding server on new port %d ... \n", serv_port);
+			port = ntohs(servaddr.sin_port);
+			servaddr.sin_port = htons(serv_port);
+			Connect(sockfd, (SA *) &servaddr, sizeof(servaddr));
+			n = Recv(sockfd, buff, len, 0);
+			if(n > 0){
+				printf("Acknowledgement received on new connection: %s\n",buff);
+			}
 			break;
 		}
 		if(FD_ISSET(pipefd[0], &rset)){
 			Read(pipefd[0], &n, 1);		/*timer expired*/
 			printf("\nPacket lost!! Resending packet..\n");
+			i++;				/*Count the number of retries*/
 			goto L1;			/*Send file name again*/
 		}	
 	}
