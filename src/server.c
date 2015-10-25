@@ -161,8 +161,33 @@ int main(int argc, char ** argv){
       int server_port = ntohs(server_assigned.sin_port);
       Sendto(*sock_fd_array_iter, &server_port, sizeof(server_port),0, (SA *) &client, sizeof(client));
       
-      //Send(*sock_fd_array_iter, server_assigned.sin_port, sizeof(server_assigned.sin_port), 0);
 
+      /*
+
+      SEND ON NEW CONNFD
+
+      */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      /*
+	
+      END
+
+      */      
       //reset for if statement clause
       udp_sock_info_iter = udp_sock_info_arr;
       
