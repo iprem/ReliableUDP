@@ -34,6 +34,17 @@ struct udp_sock_info{
 
 };
 
+struct s_conn{
+  
+  // send window 
+  int send_base = 0;
+  int send_end = 0;
+
+  //Fast Retransmit
+  int duplicate_ack = 0;
+  
+};
+
 #define MAX_IF_NUM 10
 #define PREM_PORT 2038
 #define LOCALHOST_PORT 8888
@@ -120,6 +131,7 @@ int main(int argc, char ** argv){
     */
 
     if((child = Fork()) == 0){
+      struct s_conn connection;
       
       //get ip and subnet destination by checking against stored fd/ip information
       while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
@@ -161,15 +173,38 @@ int main(int argc, char ** argv){
       int server_port = ntohs(server_assigned.sin_port);
       Sendto(*sock_fd_array_iter, &server_port, sizeof(server_port),0, (SA *) &client, sizeof(client));
       
-
       /*
 
       SEND ON NEW CONNFD
 
       */
 
+      connection.send_end = connection.send_base + window; 
 
 
+      //send and read 
+
+      
+      //send packets until you hit window end
+      //for every ack, you increment connection.send_base and window
+
+      
+
+      //if window locks
+      //set persistence timer
+      //if timer expires use window probes
+      //use exponential backoff for window probes
+
+      //keep sending until acked
+
+
+      /*ERROR */
+
+
+      //if timeout, you resend not yet acked segment and reset timer
+      
+
+      
 
 
 
