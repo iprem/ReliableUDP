@@ -42,6 +42,7 @@ struct udp_sock_info{
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
 void print_sockaddr_in(struct sockaddr_in * to_print);
+ssize_t Dg_send_recv(int, const void *, size_t, void *, size_t, const SA *, socklen_t);
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
@@ -52,13 +53,13 @@ int main(int argc, char ** argv){
   struct sockaddr_in  server, server_assigned;
   struct sockaddr_in client;
   fd_set rset;
-  int port, window, i, max, local, connfd;
+  int port, window, i, max, local, connfd, numRead;
   const int on = 1;
-  FILE *fp;
+  FILE *fp, *fp1;
   pid_t child;
   in_addr_t ip_dest, subnet_dest;
   socklen_t addr_len;
-  char recv_buf[1024];
+  char file_name[30], buffer[512], recv_ack[512];
   
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
 
@@ -130,7 +131,10 @@ int main(int argc, char ** argv){
       ip_dest = udp_sock_info_iter->ifi_addr.sin_addr.s_addr;
 
       //get client info
-      Recvfrom(*sock_fd_array_iter, recv_buf, 1024,0, (SA *) &client, &addr_len);
+      Recvfrom(*sock_fd_array_iter, file_name, 1024,0, (SA *) &client, &addr_len);
+
+	printf("File name requested: %s\n",file_name);
+
       if (subnet_dest == subnet_dest & client.sin_addr.s_addr){
 	local = TRUE;
 	printf("Client is local. \n");
@@ -168,18 +172,23 @@ int main(int argc, char ** argv){
 
       */
 
+	Sendto(*sock_fd_array_iter, "Hi", sizeof(server_port),0, (SA *) &client, sizeof(client));
+	
+	fp1 = fopen(file_name,"r");
+	if(fp1 == NULL){
+		printf("\nError !! FILE NOT FOUND\n");
+		exit(1);
+	}
+	
+	fseek(fp, 0, SEEK_END);
+	int fileSize = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	printf("FileSize %d \n", fileSize);
 
-
-
-
-
-
-
-
-
-
-
-
+	while ( fp1 != NULL ){
+		numRead = fread(buffer, 1, 512, fp);
+		dg_send_recv(*sock_fd_array_iter, buffer, strlen(buffer), recv_ack, MAXLINE, (SA *) &client, sizeof(client));
+	}
 
 
 

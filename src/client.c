@@ -25,7 +25,7 @@ int main(int argc, char **argv){
 	int bool = 0;
 	struct msghdr msg;
 	uint32_t serverip, clientip[MAXALIASES], netmask[MAXALIASES];
-	char IPserver[16], IPclient[MAXALIASES][16], ClientIP[16], IP[16], file[MAXLENGTH], buff[MAXLINE+1];
+	char IPserver[16], IPclient[MAXALIASES][16], ClientIP[16], IP[16], file[MAXLENGTH], buff[MAXLINE+1], send_ack[MAXLINE+1];
 	struct sockaddr_in servaddr, cliaddr, peer;
 	
 	if(argc != 2)	err_quit("Usage: udpcli client.in");
@@ -159,6 +159,29 @@ int main(int argc, char **argv){
 			if(n > 0){
 				printf("Acknowledgement received on new connection: %s\n",buff);
 			}
+			printf("\nPrinting requested file\n");
+			/*while( (n = dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), (SA *) &servaddr, sizeof(servaddr))) > 0 ){
+				printf("%s",buff);
+			}*/
+			static struct msghdr msgrecv;
+			struct iovec	iovrecv[2];
+			static struct hdr {
+  				uint32_t	seq;	/* sequence # */
+  				uint32_t	ts;		/* timestamp when sent */
+			} sendhdr, recvhdr;
+
+
+			msgrecv.msg_name = NULL;
+			msgrecv.msg_namelen = 0;
+			msgrecv.msg_iov = iovrecv;
+			msgrecv.msg_iovlen = 2;
+			iovrecv[0].iov_base = &recvhdr;
+			iovrecv[0].iov_len = sizeof(struct hdr);
+			iovrecv[1].iov_base = buff;
+			iovrecv[1].iov_len = sizeof(buff);
+			
+			Recvmsg(sockfd, &msgrecv, 0);
+			printf("%s",buff);
 			break;
 		}
 		if(FD_ISSET(pipefd[0], &rset)){
@@ -168,6 +191,7 @@ int main(int argc, char **argv){
 			goto L1;			/*Send file name again*/
 		}	
 	}
+
 	free_ifi_info_plus(ifi);
 	exit(0);
 }
