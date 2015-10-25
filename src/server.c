@@ -41,6 +41,7 @@ struct udp_sock_info{
 #define FALSE 0
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
+void print_sockaddr_in(struct sockaddr_in * to_print);
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
@@ -48,7 +49,8 @@ int main(int argc, char ** argv){
   int * sock_fd_array_iter = sock_fd_array;
   struct udp_sock_info udp_sock_info_arr[MAX_IF_NUM];
   struct udp_sock_info  * udp_sock_info_iter  = udp_sock_info_arr; 
-  struct sockaddr_in client, server, server_assigned;
+  struct sockaddr_in  server, server_assigned;
+  struct sockaddr_in client;
   fd_set rset;
   int port, window, i, max, local, connfd;
   const int on = 1;
@@ -87,10 +89,8 @@ int main(int argc, char ** argv){
   bind_sock(sock_fd_array, udp_sock_info_arr);
   print_sock_info(udp_sock_info_arr, MAX_IF_NUM);
 
-
+  FD_ZERO(&rset);
   while(1){
-
-    FD_ZERO(&rset);
     // stdout is 2
     max = 2;
     while((*sock_fd_array_iter) != -1)
@@ -101,6 +101,7 @@ int main(int argc, char ** argv){
       FD_SET(*sock_fd_array_iter, &rset);
       sock_fd_array_iter++;
       }
+    //reset iterator
     sock_fd_array_iter = sock_fd_array;
     
     //not sure how pselect and signal race are related
@@ -108,10 +109,19 @@ int main(int argc, char ** argv){
     pselect(max + 1, &rset, 0, 0, 0, 0 );
     
     while(!FD_ISSET(*sock_fd_array_iter, &rset)){
-    sock_fd_array_iter++;
+      sock_fd_array_iter++;
     }
+    
 
-    if(Fork() == 0){
+    /*
+
+    CHILD 
+
+    */
+
+    if((child = Fork()) == 0){
+      
+      //get ip and subnet destination by checking against stored fd/ip information
       while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
 	{
 	  udp_sock_info_iter++;
@@ -119,7 +129,8 @@ int main(int argc, char ** argv){
       subnet_dest = udp_sock_info_iter->subnet_mask;
       ip_dest = udp_sock_info_iter->ifi_addr.sin_addr.s_addr;
 
-      recvfrom(*sock_fd_array_iter, recv_buf, 1024,0, (SA *) &client, sizeof(client));
+      //get client info
+      Recvfrom(*sock_fd_array_iter, recv_buf, 1024,0, (SA *) &client, &addr_len);
       if (subnet_dest == subnet_dest & client.sin_addr.s_addr){
 	local = TRUE;
 	printf("Client is local. \n");
@@ -129,9 +140,12 @@ int main(int argc, char ** argv){
 	printf("Client is not local. \n");
       }
   
-      
+      //create new socket
       connfd = Socket(AF_INET, SOCK_DGRAM, 0);
       Setsockopt(connfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+      if(local == TRUE){
+	Setsockopt(connfd, SOL_SOCKET, SO_DONTROUTE, &on, sizeof(on));
+      }
       server.sin_addr.s_addr = udp_sock_info_iter->ifi_addr.sin_addr.s_addr;
       server.sin_port = 0;
       server.sin_family = AF_INET;
@@ -141,14 +155,22 @@ int main(int argc, char ** argv){
       char server_ip_addr[40];
       inet_ntop(AF_INET, &server_assigned.sin_addr.s_addr, server_ip_addr, 40);
       printf("IP address after bind: %s \n", server_ip_addr);
-      printf("Port after bind: &d \n", ntohs(server_assigned.sin_port));
+      printf("Port after bind: %d \n", ntohs(server_assigned.sin_port));
+      
+
+      int server_port = ntohs(server_assigned.sin_port);
+      Sendto(*sock_fd_array_iter, &server_port, sizeof(server_port),0, (SA *) &client, sizeof(client));
+      
+      //Send(*sock_fd_array_iter, server_assigned.sin_port, sizeof(server_assigned.sin_port), 0);
 
       //reset for if statement clause
       udp_sock_info_iter = udp_sock_info_arr;
       
+      exit(0);
     }
 
     //for while loop
+    FD_CLR(*sock_fd_array_iter, &rset);
     sock_fd_array_iter = sock_fd_array;
   }
 
@@ -163,6 +185,19 @@ int main(int argc, char ** argv){
   return 0;    
 }
 
+
+void print_sockaddr_in(struct sockaddr_in * to_print)
+{
+  char ip_addr[40];
+  int port;
+  
+  inet_ntop(AF_INET, &(to_print->sin_addr.s_addr), ip_addr, sizeof(*to_print));
+  port = ntohs(to_print->sin_port);
+	
+  printf("IP Addr: %s \n", ip_addr);
+  printf("Port: %d \n", port);
+
+}
 
 void bind_sock(int * arr, struct udp_sock_info * sock_info){
 
