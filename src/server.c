@@ -34,7 +34,8 @@ struct udp_sock_info{
 
 };
 
-struct s_conn{
+/*
+struct s_conn {
   
   // send window 
   int send_base = 0;
@@ -44,6 +45,7 @@ struct s_conn{
   int duplicate_ack = 0;
   
 };
+*/
 
 #define MAX_IF_NUM 10
 #define PREM_PORT 2038
@@ -67,7 +69,7 @@ int main(int argc, char ** argv){
   int port, window, i, max, local, connfd, numRead;
   const int on = 1;
   FILE *fp, *fp1;
-  pid_t child;
+  pid_t child = -1;
   in_addr_t ip_dest, subnet_dest;
   socklen_t addr_len;
   char file_name[30], buffer[512], recv_ack[512];
@@ -132,7 +134,7 @@ int main(int argc, char ** argv){
     */
 
     if((child = Fork()) == 0){
-      struct s_conn connection;
+      //struct s_conn connection;
       
       //get ip and subnet destination by checking against stored fd/ip information
       while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
@@ -143,9 +145,12 @@ int main(int argc, char ** argv){
       ip_dest = udp_sock_info_iter->ifi_addr.sin_addr.s_addr;
 
       //get client info
-      Recvfrom(*sock_fd_array_iter, file_name, 1024,0, (SA *) &client, &addr_len);
+      int readsize = 0;
+      readsize =Recvfrom(*sock_fd_array_iter, file_name, 1024,0, (SA *) &client, &addr_len);
+      file_name[readsize] = 0;
+      printf("File name requested: %s\n",file_name);
 
-	printf("File name requested: %s\n",file_name);
+      printf("AFTER FILE NAME \n");
 
       if (subnet_dest == subnet_dest & client.sin_addr.s_addr){
 	local = TRUE;
@@ -183,7 +188,7 @@ int main(int argc, char ** argv){
 
       */
 
-      connection.send_end = connection.send_base + window; 
+      //connection.send_end = connection.send_base + window; 
       //send and read 
       //send packets until you hit window end
       //for every ack, you increment connection.send_base and window
@@ -206,14 +211,18 @@ int main(int argc, char ** argv){
 	exit(1);
       }
 	
+      /*
       fseek(fp, 0, SEEK_END);
       int fileSize = ftell(fp);
       fseek(fp, 0, SEEK_SET);
       printf("FileSize %d \n", fileSize);
+      */
       
-      while ( fp1 != NULL ){
-	numRead = fread(buffer, 1, 512, fp);
-	dg_send_recv(*sock_fd_array_iter, buffer, strlen(buffer), recv_ack, MAXLINE, (SA *) &client, sizeof(client));
+      int read_amount = 0;
+      printf("FILE CONTENTS \n");
+      char newbuf[10] = "whatup g";
+      while (read_amount = fread(buffer, 512, 1, fp1)){
+	Dg_send_recv(connfd, buffer, strlen(buffer), recv_ack, MAXLINE, (SA *) &client, sizeof(client));
       }
 
       /*

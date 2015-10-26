@@ -125,17 +125,17 @@ int main(int argc, char **argv){
 	srand(seed);	/*Initialize random number generator*/
 	i = 0;
 		
-    L1:	if( i > RETRY ){
+ L1:	if( i > RETRY ){
 		printf("\nServer not responding...Giving up !!!\n");
 		exit(1);
-	}
+		}
 	if((p = (rand() % 100)/100.0) > prob ){
-		printf("\n%f \t %f\n", p, prob); 
-		Send(sockfd, file, strlen(file), 0);
+	  printf("\n%f \t %f\n", p, prob); 
+	  Send(sockfd, file, strlen(file), 0);
 	}
 	else{
-		printf("\nThe packet has been dropped. Retrying... \n");
-		goto L1;
+	  printf("\nThe packet has been dropped. Retrying... \n");
+	  goto L1;
 	}
 	alarm(2);	/*Set timeout as 2 secs*/
 	for ( ; ;){
@@ -161,6 +161,7 @@ int main(int argc, char **argv){
 				printf("Acknowledgement received on new connection: %s\n",buff);
 			}
 			printf("\nPrinting requested file\n");
+			printf("%s \n", file);
 			/*while( (n = dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), (SA *) &servaddr, sizeof(servaddr))) > 0 ){
 				printf("%s",buff);
 			}*/

@@ -9,7 +9,7 @@ int		rtt_d_flag = 0;		/* debug flag; can be set by caller */
  */
 
 //rtt is scaled up by 4
-#define	RTT_RTOCALC(ptr) (((ptr)->rtt_srtt >> 3)) + (((ptr)->rtt_rttvar) >> 2))
+#define	RTT_RTOCALC(ptr) (((ptr)->rtt_srtt) >> 3) + (((ptr)->rtt_rttvar) >> 2)
 
 static float
 rtt_minmax(float rto)
