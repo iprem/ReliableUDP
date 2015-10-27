@@ -2,6 +2,8 @@
 
 #include "unp.h"
 #include "unpifiplus.h"
+#include "unprtt.h"
+#include  <setjmp.h>
 
 // connect takes care of "asynchronous" error messages.
 // asynchronous means sendto returns successfully message sent by sendto caused an error .
@@ -34,28 +36,38 @@ struct udp_sock_info{
 
 };
 
-/*
 struct s_conn {
-  
-  // send window 
-  int send_base = 0;
-  int send_end = 0;
+  int send_base;
+  int send_end;
+  int seq_num;
 
-  //Fast Retransmit
-  int duplicate_ack = 0;
-  
+  int dup_ack;
 };
-*/
+
+
+static struct hdr {
+  uint32_t	seq;	/* sequence # */
+  uint32_t	ts;		/* timestamp when sent */
+} sendhdr, recvhdr;
+
 
 #define MAX_IF_NUM 10
 #define PREM_PORT 2038
 #define LOCALHOST_PORT 8888
 #define TRUE 1
 #define FALSE 0
+#define ACK_SIZE 100
+#define RTT_DEBUG
+
+static int rttinit = 0;
+static struct rtt_info   rttinfo;
+static sigjmp_buf	jmpbuf;
+
+
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
 void print_sockaddr_in(struct sockaddr_in * to_print);
-ssize_t Dg_send_recv(int, const void *, size_t, void *, size_t, const SA *, socklen_t);
+static void sig_alrm(int signo);
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
@@ -66,14 +78,15 @@ int main(int argc, char ** argv){
   struct sockaddr_in  server, server_assigned;
   struct sockaddr_in client;
   fd_set rset;
-  int port, window, i, max, local, connfd, numRead;
+  int port, window_size, i, max, local, connfd, numRead;
   const int on = 1;
   FILE *fp, *fp1;
   pid_t child = -1;
   in_addr_t ip_dest, subnet_dest;
   socklen_t addr_len;
   char file_name[30], buffer[512], recv_ack[512];
-  
+  ssize_t n;
+
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
 
   //initialize so we can loop and print later
@@ -96,8 +109,8 @@ int main(int argc, char ** argv){
 
   //read arguments from server.in
   if(fscanf(fp,"%d\n",&port) == 0)	err_quit("No port number found in the file\n");
-  if(fscanf(fp,"%d\n",&window) == 0)	err_quit("No window size found in the file\n");
-  
+  if(fscanf(fp,"%d\n",&window_size) == 0)	err_quit("No window size found in the file\n");
+
   //bind all ip addrs to diff sockets. 
   //we only want unicast addrs. Get_ifi_info gets all interfaces
   bind_sock(sock_fd_array, udp_sock_info_arr);
@@ -115,7 +128,7 @@ int main(int argc, char ** argv){
       FD_SET(*sock_fd_array_iter, &rset);
       sock_fd_array_iter++;
       }
-    //reset iterator
+    //Reset iterator
     sock_fd_array_iter = sock_fd_array;
     
     //not sure how pselect and signal race are related
@@ -134,7 +147,10 @@ int main(int argc, char ** argv){
     */
 
     if((child = Fork()) == 0){
-      //struct s_conn connection;
+      struct s_conn connection;
+      connection.send_base = 0;
+      connection.send_end = connection.send_base + window_size;
+      connection.dup_ack = 0;
       
       //get ip and subnet destination by checking against stored fd/ip information
       while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
@@ -210,26 +226,70 @@ int main(int argc, char ** argv){
 	printf("\nError !! FILE NOT FOUND\n");
 	exit(1);
       }
-	
+      
+
       /*
-      fseek(fp, 0, SEEK_END);
-      int fileSize = ftell(fp);
-      fseek(fp, 0, SEEK_SET);
-      printf("FileSize %d \n", fileSize);
+	CONNECTION SETUP
       */
+
+      Signal(SIGALRM, sig_alrm);
       
       int read_amount = 0;
-      printf("FILE CONTENTS \n");
-      char newbuf[10] = "whatup g";
+      //fread(buffer, 512, 1, fp1);
       while (read_amount = fread(buffer, 512, 1, fp1)){
-	Dg_send_recv(connfd, buffer, strlen(buffer), recv_ack, MAXLINE, (SA *) &client, sizeof(client));
+      //while (1){
+
+	if (rttinit == 0) {
+	    rtt_init(&rttinfo);		/* first time we're called */
+	    rttinit = 1;
+	    rtt_d_flag = 1;
+	  }
+
+	//struct itimerval value = rtt_start(&rttinfo);
+	//printf("RTO %d \n", rttinfo.rtt_rto);
+	//printf(" ALARM TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
+	struct itimerval value;
+	value.it_value.tv_usec = 2 * 1000 * 1000; 
+	setitimer(ITIMER_REAL, &value, 0);
+	//XX
+	//Currently just sends buffer without new read until it hits send_end
+	while(connection.seq_num <= connection.send_end){
+	  Server_send(connfd, buffer, strlen(buffer), (SA *) &client, sizeof(client), 
+		      &connection);
+	}
+
+
+	//XX Right now this is a global timeout parameter not a packet specific timeout
+	if(sigsetjmp(jmpbuf, 1) != 0) {
+	  //	  if (rtt_timeout(&rttinfo) < 0) {
+	    err_msg("dg_send_recv: no response from server, giving up");
+	    rttinit = 0;	/* reinit in case we're called again */
+	    errno = ETIMEDOUT;
+	    return(-1);
+	    //}
+	  //xx need to retransmit starting at base
+#ifdef	RTT_DEBUG
+	  err_msg("dg_send_recv: timeout, retransmitting");
+#endif
+	}
+	
+	while(n = server_recv(connfd))
+	  {
+	    if (recvhdr.seq > connection.send_base){
+	      connection.send_base = recvhdr.seq;
+	      connection.send_end = connection.send_base + window_size;
+	      printf("ACK Received.");
+	      break;
+	    }
+	  }
+	
+
       }
 
       /*
-	
       END
-
       */      
+
       //reset for if statement clause
       udp_sock_info_iter = udp_sock_info_arr;
       
@@ -241,17 +301,97 @@ int main(int argc, char ** argv){
     sock_fd_array_iter = sock_fd_array;
   }
 
-
-    /*    
-	  printf("It worked! \n");
-	  char huge_buf[1024];
-	  Recv(*sock_fd_array_iter, huge_buf, 1024, 0);
-	  printf("%s", huge_buf);
-    */
-
   return 0;    
 }
 
+static void 
+sig_alrm(int signo){
+  
+  siglongjmp(jmpbuf, 1);
+ 
+}
+
+ssize_t server_recv(int fd)
+{
+  
+  ssize_t			n;
+  static struct msghdr msgrecv;
+  struct iovec  iovrecv[2];
+  char inbuff[1024];
+
+  msgrecv.msg_name = NULL;
+  msgrecv.msg_namelen = 0;
+  msgrecv.msg_iov = iovrecv;
+  msgrecv.msg_iovlen = 1;
+  iovrecv[0].iov_base = &recvhdr;
+  iovrecv[0].iov_len = sizeof(struct hdr);
+  iovrecv[1].iov_base = inbuff;
+  iovrecv[1].iov_len = sizeof(inbuff);
+
+  
+  n = Recvmsg(fd, &msgrecv, 0);
+  printf("RETURN FROM RECVMSG");
+
+  rtt_stop(&rttinfo, rtt_ts(&rttinfo) - recvhdr.ts);
+
+  //set duplicate ack field
+  //set retransmit number
+
+
+}
+
+ssize_t Server_send(int fd, const void *outbuff,  size_t outbytes, 
+		    const SA *destaddr, socklen_t destlen, struct s_conn *connection)
+{
+
+  ssize_t n;
+
+  n = server_send(fd, outbuff, outbytes, destaddr, destlen, connection);
+
+  if (n < 0)
+    err_quit("server_send error");
+  
+  return(n);
+
+
+}
+
+ssize_t server_send(int fd, const void *outbuff, size_t outbytes, 
+		    const SA *destaddr, socklen_t destlen, struct s_conn *connection)
+{
+
+  ssize_t			n;
+  struct iovec	iovsend[2];
+  static struct msghdr msgsend;
+
+  //increment where we are in receiver window
+  sendhdr.seq++;
+  connection->seq_num = sendhdr.seq;
+
+  print_sockaddr_in(destaddr);
+
+  sendhdr.seq++;
+  msgsend.msg_name = destaddr;
+  msgsend.msg_namelen = destlen;
+  msgsend.msg_iov = iovsend;
+  msgsend.msg_iovlen = 2;
+  iovsend[0].iov_base = &sendhdr;
+  iovsend[0].iov_len = sizeof(struct hdr);
+  iovsend[1].iov_base = outbuff;
+  iovsend[1].iov_len = outbytes;
+  
+  //this won't work here either
+  //XX
+  rtt_newpack(&rttinfo);		/* initialize for this packet */
+
+#ifdef	RTT_DEBUG
+  fprintf(stderr, "send %4d: ", sendhdr.seq);
+#endif
+  
+  sendhdr.ts = rtt_ts(&rttinfo);
+  Sendmsg(fd, &msgsend, 0);
+
+}
 
 void print_sockaddr_in(struct sockaddr_in * to_print)
 {
