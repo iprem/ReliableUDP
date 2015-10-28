@@ -25,8 +25,10 @@ int main(int argc, char **argv){
 	int bool = 0;
 	struct msghdr msg;
 	uint32_t serverip, clientip[MAXALIASES], netmask[MAXALIASES];
-	char IPserver[16], IPclient[MAXALIASES][16], ClientIP[16], IP[16], file[MAXLENGTH], buff[MAXLINE+1], send_ack[MAXLINE+1];
+	char IPserver[16], IPclient[MAXALIASES][16], ClientIP[16], IP[16], file[MAXLENGTH], buff[MAXLINE+1];
 	struct sockaddr_in servaddr, cliaddr, peer;
+	char send_ack[MAXLINE+1] = "ACK";
+     
 	
 	if(argc != 2)	err_quit("Usage: udpcli client.in");
 	
@@ -137,6 +139,7 @@ int main(int argc, char **argv){
 	  printf("\nThe packet has been dropped. Retrying... \n");
 	  goto L1;
 	}
+	//This alarm protects the initial recvfrom for port number
 	alarm(2);	/*Set timeout as 2 secs*/
 	for ( ; ;){
 		FD_SET(sockfd, &rset);
@@ -156,34 +159,56 @@ int main(int argc, char **argv){
 			port = ntohs(servaddr.sin_port);
 			servaddr.sin_port = htons(serv_port);
 			Connect(sockfd, (SA *) &servaddr, sizeof(servaddr));
+
+			// Get acknowledgement of new connection
 			n = Recv(sockfd, buff, len, 0);
 			if(n > 0){
 				printf("Acknowledgement received on new connection: %s\n",buff);
 			}
-			printf("\nPrinting requested file\n");
-			printf("%s \n", file);
-			/*while( (n = dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), (SA *) &servaddr, sizeof(servaddr))) > 0 ){
-				printf("%s",buff);
-			}*/
-			static struct msghdr msgrecv;
-			struct iovec	iovrecv[2];
-			static struct hdr {
-  				uint32_t	seq;	/* sequence # */
-  				uint32_t	ts;		/* timestamp when sent */
-			} sendhdr, recvhdr;
 
-
-			msgrecv.msg_name = NULL;
-			msgrecv.msg_namelen = 0;
-			msgrecv.msg_iov = iovrecv;
-			msgrecv.msg_iovlen = 2;
-			iovrecv[0].iov_base = &recvhdr;
-			iovrecv[0].iov_len = sizeof(struct hdr);
-			iovrecv[1].iov_base = buff;
-			iovrecv[1].iov_len = sizeof(buff);
+			printf("MY FILE NAME: %s  \n", file);
+			char mynewbuf[7];
+			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), (SA *) &servaddr, sizeof(servaddr))) > 0 ){
+			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), 0, 0)) > 0 ){
+			static struct msghdr send;
+			struct iovec iovsend[2];
+			struct hdr{
+			  uint32_t seq;
+			  uint32_t ts;
+			  int fin;
+			  int window_size;
+			  } sendhdr;
 			
-			Recvmsg(sockfd, &msgrecv, 0);
-			printf("%s",buff);
+			int control = 0;
+			while(1){
+			  send.msg_name = 0;
+			  send.msg_namelen = 0;
+			  send.msg_iov = iovsend;
+			  send.msg_iovlen = 2;
+			  iovsend[0].iov_base = &sendhdr;
+			  iovsend[0].iov_len = sizeof(struct hdr);
+			  iovsend[1].iov_base = mynewbuf;
+			  iovsend[1].iov_len = sizeof(mynewbuf);
+
+			  //mynewbuf[0] = 'h';
+			  //mynewbuf[1] = 'i';
+			  //mynewbuf[2] = 0;
+			  
+			  memset(mynewbuf, 0, sizeof(mynewbuf));
+			  int n = Recvmsg(sockfd, &send, 0);
+			  //recv(sockfd, mynewbuf, sizeof(mynewbuf), 0);
+			  //mynewbuf[0] = 'a';
+			  //printf("CHAR: %c \n", mynewbuf[0]);
+			  printf("%s \n", mynewbuf);
+			  if (control < 1)
+			    {
+			      Sendmsg(sockfd, &send, 0);
+			      control++;
+			    }
+			  
+			}
+			
+			printf("Shouldn't get to here \n");
 			break;
 		}
 		if(FD_ISSET(pipefd[0], &rset)){
@@ -218,3 +243,4 @@ static void recvfrom_alarm(int signo){
 	Write(pipefd[1],"",1);	/*Write one null byte data to pipe*/
 	return;
 }
+

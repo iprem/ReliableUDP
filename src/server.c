@@ -49,6 +49,7 @@ static struct hdr {
   uint32_t	seq;	/* sequence # */
   uint32_t	ts;		/* timestamp when sent */
   int fin;
+  int window_size;
 } sendhdr, recvhdr;
 
 
@@ -79,7 +80,7 @@ int main(int argc, char ** argv){
   struct sockaddr_in  server, server_assigned;
   struct sockaddr_in client;
   fd_set rset;
-  int port, window_size, i, max, local, connfd, numRead;
+  int port, s_window_size, i, max, local, connfd, numRead;
   const int on = 1;
   FILE *fp, *fp1;
   pid_t child = -1;
@@ -113,7 +114,7 @@ int main(int argc, char ** argv){
 
   //read arguments from server.in
   if(fscanf(fp,"%d\n",&port) == 0)	err_quit("No port number found in the file\n");
-  if(fscanf(fp,"%d\n",&window_size) == 0)	err_quit("No window size found in the file\n");
+  if(fscanf(fp,"%d\n",&s_window_size) == 0)	err_quit("No window size found in the file\n");
 
   //bind all ip addrs to diff sockets. 
   //we only want unicast addrs. Get_ifi_info gets all interfaces
@@ -153,7 +154,7 @@ int main(int argc, char ** argv){
     if((child = Fork()) == 0){
       struct s_conn connection;
       connection.send_base = 0;
-      connection.send_end = connection.send_base + window_size;
+      connection.send_end = connection.send_base + recvhdr.window_size;
       connection.dup_ack = 0;
       
       //get ip and subnet destination by checking against stored fd/ip information
@@ -252,19 +253,13 @@ int main(int argc, char ** argv){
 	//XX
 	//Currently just sends buffer without new read until it hits send_end
 	while(connection.seq_num <= connection.send_end){
-	  //read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
-	  //payload[sizeof(payload) -1 ] = 0;
-	  memset(payload, '0', sizeof(payload));
-	  payload[0] = 'h';
-	  payload[1] = 'i';
-	  payload[2] = 0;
-	   
-	  //Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
-	  //&connection);
-	  Sendto(connfd, "Hi", 2 ,0, (SA *) &client, sizeof(client));
+	  read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
+	  payload[sizeof(payload) -1 ] = 0;
+	  Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
+		      &connection);
 
 	}
-
+	
 
 	//XX Right now this is a global timeout parameter not a packet specific timeout
 	if(sigsetjmp(jmpbuf, 1) != 0) {
@@ -294,7 +289,7 @@ int main(int argc, char ** argv){
 	  {
 	    if (recvhdr.seq > connection.send_base){
 	      connection.send_base = recvhdr.seq;
-	      connection.send_end = connection.send_base + window_size;
+	      connection.send_end = connection.send_base + recvhdr.window_size;
 	      //reset retransmit num
 	      rtt_newpack(&rttinfo);
 	      printf("ACK Received.");
@@ -350,7 +345,7 @@ ssize_t server_recv(int fd)
 
   
   n = Recvmsg(fd, &msgrecv, 0);
-  printf("RETURN FROM RECVMSG");
+  printf("INBUFFER!!! : %s", inbuff);
 
   rtt_stop(&rttinfo, rtt_ts(&rttinfo) - recvhdr.ts);
 
