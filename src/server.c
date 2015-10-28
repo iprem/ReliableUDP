@@ -48,6 +48,7 @@ struct s_conn {
 static struct hdr {
   uint32_t	seq;	/* sequence # */
   uint32_t	ts;		/* timestamp when sent */
+  int fin;
 } sendhdr, recvhdr;
 
 
@@ -58,7 +59,7 @@ static struct hdr {
 #define FALSE 0
 #define ACK_SIZE 100
 #define RTT_DEBUG
-
+#define PAYLOAD_SIZE    20    
 static int rttinit = 0;
 static struct rtt_info   rttinfo;
 static sigjmp_buf	jmpbuf;
@@ -84,10 +85,13 @@ int main(int argc, char ** argv){
   pid_t child = -1;
   in_addr_t ip_dest, subnet_dest;
   socklen_t addr_len;
-  char file_name[30], buffer[512], recv_ack[512];
+  char file_name[30], buffer[4096], recv_ack[512], payload[PAYLOAD_SIZE-sizeof(struct hdr)];
   ssize_t n;
+  recvhdr.fin = 0;
 
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
+  
+  
 
   //initialize so we can loop and print later
   for(i = 0; i < MAX_IF_NUM; i++){
@@ -204,11 +208,6 @@ int main(int argc, char ** argv){
 
       */
 
-      //connection.send_end = connection.send_base + window; 
-      //send and read 
-      //send packets until you hit window end
-      //for every ack, you increment connection.send_base and window
-
       /*ERROR */
       
       //if window locks
@@ -236,9 +235,8 @@ int main(int argc, char ** argv){
       
       int read_amount = 0;
       //fread(buffer, 512, 1, fp1);
-      while (read_amount = fread(buffer, 512, 1, fp1)){
-      //while (1){
-      
+      while (!recvhdr.fin){
+
       sendagain:
 	if (rttinit == 0) {
 	  rtt_init(&rttinfo);		/* first time we're called */
@@ -254,8 +252,17 @@ int main(int argc, char ** argv){
 	//XX
 	//Currently just sends buffer without new read until it hits send_end
 	while(connection.seq_num <= connection.send_end){
-	  Server_send(connfd, buffer, strlen(buffer), (SA *) &client, sizeof(client), 
-		      &connection);
+	  //read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
+	  //payload[sizeof(payload) -1 ] = 0;
+	  memset(payload, '0', sizeof(payload));
+	  payload[0] = 'h';
+	  payload[1] = 'i';
+	  payload[2] = 0;
+	   
+	  //Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
+	  //&connection);
+	  Sendto(connfd, "Hi", 2 ,0, (SA *) &client, sizeof(client));
+
 	}
 
 
@@ -268,11 +275,15 @@ int main(int argc, char ** argv){
 	    return(-1);
 	  }
 	  
+	  /*
+	    RETRANSMIT
+	  */
 	  //reset back to oldest unacked packet
 	  connection.seq_num = connection.send_base;
 	  sendhdr.seq = connection.send_base;
-	  printf("CONNECTION SEQ NUM RESET TO: %d \n", connection.seq_num);
-	  printf("CONNECTION WINDOW_END VALUE: %d \n", connection.send_end);
+	  //restart from position in file corresponding to packet that needs to be retransmitted
+	  int offset  = connection.seq_num * sizeof(payload);
+	  fseek(fp1, offset, SEEK_SET);
 #ifdef	RTT_DEBUG
 	  err_msg("dg_send_recv: timeout, retransmitting");
 #endif
@@ -349,6 +360,7 @@ ssize_t server_recv(int fd)
 
 }
 
+
 ssize_t Server_send(int fd, const void *outbuff,  size_t outbytes, 
 		    const SA *destaddr, socklen_t destlen, struct s_conn *connection)
 {
@@ -377,8 +389,6 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   sendhdr.seq++;
   connection->seq_num = sendhdr.seq;
 
-  print_sockaddr_in(destaddr);
-
   sendhdr.seq++;
   msgsend.msg_name = destaddr;
   msgsend.msg_namelen = destlen;
@@ -389,6 +399,7 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   iovsend[1].iov_base = outbuff;
   iovsend[1].iov_len = outbytes;
   
+  printf("OUTBUF: %s \n", outbuff);
 
 #ifdef	RTT_DEBUG
   fprintf(stderr, "send %4d: ", sendhdr.seq);

@@ -11,6 +11,8 @@ int		rtt_d_flag = 0;		/* debug flag; can be set by caller */
 //rtt is scaled up by 4
 #define	RTT_RTOCALC(ptr) (((ptr)->rtt_srtt) >> 3) + (((ptr)->rtt_rttvar) >> 2)
 
+//XX
+//NOT BEING FACTORED INTO RTT START
 static float
 rtt_minmax(float rto)
 {
@@ -29,9 +31,10 @@ rtt_init(struct rtt_info *ptr)
 	Gettimeofday(&tv, NULL);
 	ptr->rtt_base = tv.tv_sec;		/* # sec since 1/1/1970 at start */
 
+	ptr->rtt_nrexmt = 0;
 	ptr->rtt_rtt    = 0;
 	ptr->rtt_srtt   = 0;
-	ptr->rtt_rttvar = 3;
+	ptr->rtt_rttvar = 3000;
 	ptr->rtt_rto = rtt_minmax(RTT_RTOCALC(ptr));
 		/* first RTO */
 }
@@ -61,11 +64,26 @@ rtt_newpack(struct rtt_info *ptr)
 	ptr->rtt_nrexmt = 0;
 }
 
-int
+
+/*
+Use to construct itimerval for setitimer
+
+*/
+struct itimerval 
 rtt_start(struct rtt_info *ptr)
 {
-	return((int) (ptr->rtt_rto + 0.5));		/* round float to int */
-		/* 4return value can be used as: alarm(rtt_start(&foo)) */
+
+  struct itimerval timerval; 
+  // You cannot specify more than one second in microseconds
+  timerval.it_value.tv_sec = ptr->rtt_rto / 1000;
+  // put leftover time in microsecond field
+  // remember, we are working with milliseconds
+  timerval.it_value.tv_usec = (ptr->rtt_rto % 1000) * 1000;
+  
+  timerval.it_interval.tv_sec = 0;
+  timerval.it_interval.tv_usec = 0;
+
+  return timerval;
 }
 /* end rtt_ts */
 
@@ -82,7 +100,7 @@ rtt_start(struct rtt_info *ptr)
 void
 rtt_stop(struct rtt_info *ptr, uint32_t ms)
 {
-	double		delta;
+	int		delta;
 
 	//ptr->rtt_rtt = ms / 1000;		/* measured RTT in seconds */
 	ptr->rtt_rtt = ms ;		/* measured RTT in ms */
@@ -132,7 +150,7 @@ rtt_debug(struct rtt_info *ptr)
 	if (rtt_d_flag == 0)
 		return;
 
-	fprintf(stderr, "rtt = %.3f, srtt = %.3f, rttvar = %.3f, rto = %.3f\n",
+	fprintf(stderr, "rtt = %d, srtt = %d, rttvar = %d, rto = %d \n",
 			ptr->rtt_rtt, ptr->rtt_srtt, ptr->rtt_rttvar, ptr->rtt_rto);
 	fflush(stderr);
 }
