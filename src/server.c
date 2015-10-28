@@ -238,19 +238,19 @@ int main(int argc, char ** argv){
       //fread(buffer, 512, 1, fp1);
       while (read_amount = fread(buffer, 512, 1, fp1)){
       //while (1){
-
+      
+      sendagain:
 	if (rttinit == 0) {
-	    rtt_init(&rttinfo);		/* first time we're called */
-	    rttinit = 1;
-	    rtt_d_flag = 1;
-	  }
-
-	//struct itimerval value = rtt_start(&rttinfo);
-	//printf("RTO %d \n", rttinfo.rtt_rto);
-	//printf(" ALARM TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
-	struct itimerval value;
-	value.it_value.tv_usec = 2 * 1000 * 1000; 
-	setitimer(ITIMER_REAL, &value, 0);
+	  rtt_init(&rttinfo);		/* first time we're called */
+	  rttinit = 1;
+	  rtt_d_flag = 1;
+	}
+	
+	struct itimerval value = rtt_start(&rttinfo);
+	printf("RTO %d \n", rttinfo.rtt_rto);
+	printf(" ALARM TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
+	printf(" ALARM TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
+	setitimer(ITIMER_REAL, &value, NULL);
 	//XX
 	//Currently just sends buffer without new read until it hits send_end
 	while(connection.seq_num <= connection.send_end){
@@ -261,23 +261,31 @@ int main(int argc, char ** argv){
 
 	//XX Right now this is a global timeout parameter not a packet specific timeout
 	if(sigsetjmp(jmpbuf, 1) != 0) {
-	  //	  if (rtt_timeout(&rttinfo) < 0) {
+	  if (rtt_timeout(&rttinfo) < 0) {
 	    err_msg("dg_send_recv: no response from server, giving up");
 	    rttinit = 0;	/* reinit in case we're called again */
 	    errno = ETIMEDOUT;
 	    return(-1);
-	    //}
-	  //xx need to retransmit starting at base
+	  }
+	  
+	  //reset back to oldest unacked packet
+	  connection.seq_num = connection.send_base;
+	  sendhdr.seq = connection.send_base;
+	  printf("CONNECTION SEQ NUM RESET TO: %d \n", connection.seq_num);
+	  printf("CONNECTION WINDOW_END VALUE: %d \n", connection.send_end);
 #ifdef	RTT_DEBUG
 	  err_msg("dg_send_recv: timeout, retransmitting");
 #endif
-	}
-	
+	  goto sendagain;
+	}	
+
 	while(n = server_recv(connfd))
 	  {
 	    if (recvhdr.seq > connection.send_base){
 	      connection.send_base = recvhdr.seq;
 	      connection.send_end = connection.send_base + window_size;
+	      //reset retransmit num
+	      rtt_newpack(&rttinfo);
 	      printf("ACK Received.");
 	      break;
 	    }
@@ -305,8 +313,9 @@ int main(int argc, char ** argv){
 }
 
 static void 
-sig_alrm(int signo){
-  
+sig_alrm(int signo)
+{
+  printf("sig_alrm called \n");
   siglongjmp(jmpbuf, 1);
  
 }
@@ -380,9 +389,6 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   iovsend[1].iov_base = outbuff;
   iovsend[1].iov_len = outbytes;
   
-  //this won't work here either
-  //XX
-  rtt_newpack(&rttinfo);		/* initialize for this packet */
 
 #ifdef	RTT_DEBUG
   fprintf(stderr, "send %4d: ", sendhdr.seq);
