@@ -1,7 +1,7 @@
 # include "unp.h"
 # include "unpifiplus.h"
 
-#define SERVER_PORT 2038	/*Change server port here*/
+#define SERVER_PORT 2039	/*Change server port here*/
 #define DOALIASES 1
 #define MAXLENGTH 30
 #define RETRY 3
@@ -9,8 +9,21 @@
 void print(struct sockaddr_in *servaddr);
 uint32_t parseIPV4string(char* ipAddress);	/*Function for parsing the IP address*/
 static void recvfrom_alarm(int signo);
+void read_buffer(void *arg);	//Change to previous version
 
+static struct hdr{
+	uint32_t seq;
+	uint32_t ts;
+	int fin;
+	int window_size;
+	} sendhdr;
+
+/*** Change Start ***/
+pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t  buffer_cond  = PTHREAD_COND_INITIALIZER;
+char buffer[2048];
 static int pipefd[2];
+/*** Change End ***/
 
 int main(int argc, char **argv){
 	
@@ -28,7 +41,7 @@ int main(int argc, char **argv){
 	char IPserver[16], IPclient[MAXALIASES][16], ClientIP[16], IP[16], file[MAXLENGTH], buff[MAXLINE+1];
 	struct sockaddr_in servaddr, cliaddr, peer;
 	char send_ack[MAXLINE+1] = "ACK";
-     
+	pthread_t tid;
 	
 	if(argc != 2)	err_quit("Usage: udpcli client.in");
 	
@@ -87,8 +100,10 @@ int main(int argc, char **argv){
 		}
 	}
 	if( bool == 0 ) /*set IP address of client to primary address of client if server is not on same host*/
+	{
 		printf("\nServer and client are not on same subnet\n");
 		strcpy(ClientIP,IPclient[1]);
+	}
 
 	printf("Server address: %s\nClient address: %s\n", IPserver, ClientIP);
 
@@ -107,11 +122,12 @@ int main(int argc, char **argv){
 	Bind(sockfd, (SA *)&cliaddr, len);
 	Getsockname(sockfd, (SA*)&cliaddr, &len);
 
+	
 	Inet_ntop(AF_INET, &(cliaddr.sin_addr), IP, INET_ADDRSTRLEN);
 	printf("\nGetsockname Results: \nClient address: %s\nClient port number: %d\n", IP, ntohs(cliaddr.sin_port));
 
 	Connect(sockfd, (SA *)&servaddr, sizeof(servaddr));
-	
+			
 	Getpeername(sockfd, (SA*)&peer, &len);
 	Inet_ntop(AF_INET, &(peer.sin_addr), IP, INET_ADDRSTRLEN);
 	printf("\nGetpeername Results: \nPeer address: %s\nPeer port number: %d\n", IP, ntohs(peer.sin_port));
@@ -151,34 +167,29 @@ int main(int argc, char **argv){
 			err_sys("\nselect error\n");
 		}
 		if(FD_ISSET(sockfd, &rset)){
+			alarm(0);
 			len = servlen;
 			n = Recv(sockfd, &serv_port, len, 0);		/*Port number received*/
-			//serv_port = ntohs(serv_port);
 			printf("Port number received: %d\n",serv_port);
 			printf("Binding server on new port %d ... \n", serv_port);
 			port = ntohs(servaddr.sin_port);
 			servaddr.sin_port = htons(serv_port);
 			Connect(sockfd, (SA *) &servaddr, sizeof(servaddr));
 
-			// Get acknowledgement of new connection
-			n = Recv(sockfd, buff, len, 0);
-			if(n > 0){
-				printf("Acknowledgement received on new connection: %s\n",buff);
-			}
+			// Send acknowledgement of new connection ***Change start***
+			char *msg = "ACK";
+			Send(sockfd, msg, strlen(msg), 0);
+			/*** Change complete ***/
 
 			printf("MY FILE NAME: %s  \n", file);
-			char mynewbuf[7];
+			char mynewbuf[512];
 			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), (SA *) &servaddr, sizeof(servaddr))) > 0 ){
 			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), 0, 0)) > 0 ){
 			static struct msghdr send;
 			struct iovec iovsend[2];
-			struct hdr{
-			  uint32_t seq;
-			  uint32_t ts;
-			  int fin;
-			  int window_size;
-			  } sendhdr;
 			
+			Pthread_create(&tid, NULL, &read_buffer, mean);  /*Create thread*/
+
 			int control = 0;
 			while(1){
 			  send.msg_name = 0;
@@ -189,24 +200,27 @@ int main(int argc, char **argv){
 			  iovsend[0].iov_len = sizeof(struct hdr);
 			  iovsend[1].iov_base = mynewbuf;
 			  iovsend[1].iov_len = sizeof(mynewbuf);
-
-			  //mynewbuf[0] = 'h';
-			  //mynewbuf[1] = 'i';
-			  //mynewbuf[2] = 0;
 			  
 			  memset(mynewbuf, 0, sizeof(mynewbuf));
 			  int n = Recvmsg(sockfd, &send, 0);
-			  //recv(sockfd, mynewbuf, sizeof(mynewbuf), 0);
-			  //mynewbuf[0] = 'a';
-			  //printf("CHAR: %c \n", mynewbuf[0]);
-			  printf("%s \n", mynewbuf);
-			  if (control < 1)
+			//printf("Message received: %s \n", mynewbuf);
+
+			if (control < 1)
 			    {
 			      Sendmsg(sockfd, &send, 0);
 			      control++;
-			    }
+			    }			
+
+			/*** Change Start ***/
+			Pthread_mutex_lock(&buffer_mutex);
+			while(strlen(buffer) != 0)
+					Pthread_cond_wait (&buffer_cond, &buffer_mutex);
+			strcat(buffer,buff);
+			Pthread_mutex_unlock(&buffer_mutex);
+			/*** Change End ***/
 			  
 			}
+			Pthread_join(&tid,NULL);
 			
 			printf("Shouldn't get to here \n");
 			break;
@@ -243,4 +257,29 @@ static void recvfrom_alarm(int signo){
 	Write(pipefd[1],"",1);	/*Write one null byte data to pipe*/
 	return;
 }
+
+/*** Change Start ***/
+void read_buffer(void *arg){
+	
+	//printf("Inside thread\n");
+	int mean = 1.5;//*((int *) arg);
+	int bytes_read = 0;	
+	int wait;
+
+	while(1){
+		Pthread_mutex_lock(&buffer_mutex);
+		while(buffer[bytes_read] != 0){
+			printf("%c", buffer[bytes_read]);
+			bytes_read++;
+		}
+		strcpy(buffer,"");
+		bytes_read = 0;
+		Pthread_cond_signal(&buffer_cond);
+		Pthread_mutex_unlock(&buffer_mutex);
+		wait = -1*mean*log((rand() %100)/100.0);
+		if(sendhdr.fin == 1)	break;		/*Use FIN to terminate this loop*/
+		sleep(wait);		
+	}
+}
+/*** Change END ***/
 
