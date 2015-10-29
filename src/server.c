@@ -44,12 +44,19 @@ struct s_conn {
   int dup_ack;
 };
 
+static struct timeout{
+
+  //time in ms
+  int timeout;
+
+}persistent_timer;
 
 static struct hdr {
   uint32_t	seq;	/* sequence # */
   uint32_t	ts;		/* timestamp when sent */
   int fin;
   int window_size;
+  int probe;
 } sendhdr, recvhdr;
 
 
@@ -63,13 +70,19 @@ static struct hdr {
 #define PAYLOAD_SIZE    20    
 static int rttinit = 0;
 static struct rtt_info   rttinfo;
-static sigjmp_buf	jmpbuf;
+static sigjmp_buf	jmpbuf, jmpbuf_probe;
 
 
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
 void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
 void print_sockaddr_in(struct sockaddr_in * to_print);
 static void sig_alrm(int signo);
+static void window_probe(int signo);
+void timeout_init(struct rtt_info *ptr, struct timeout *mytimer);
+int timeout_timeout(struct timeout *ptr);
+struct itimerval timeout_start(struct timeout *timeout);
+void send_probe(int fd, const SA *destaddr, socklen_t destlen);
+void recv_probe(int fd);
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
@@ -89,6 +102,7 @@ int main(int argc, char ** argv){
   char file_name[30], buffer[4096], recv_ack[512], payload[PAYLOAD_SIZE-sizeof(struct hdr)];
   ssize_t n;
   recvhdr.fin = 0;
+  struct itimerval value;
 
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
   
@@ -152,11 +166,15 @@ int main(int argc, char ** argv){
     */
 
     if((child = Fork()) == 0){
+      //REMOVE IN FAVOR OF CONNECTION LOWER DOWN
+      //XX
+
       struct s_conn connection;
       connection.send_base = 0;
-      connection.send_end = connection.send_base + recvhdr.window_size;
+      connection.send_end = connection.send_base + s_window_size;
       connection.dup_ack = 0;
       
+
       //get ip and subnet destination by checking against stored fd/ip information
       while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
 	{
@@ -182,6 +200,12 @@ int main(int argc, char ** argv){
 	printf("Client is not local. \n");
       }
   
+
+      /*
+	CONNECTION SETUP
+      */
+
+
       //create new socket
       connfd = Socket(AF_INET, SOCK_DGRAM, 0);
       Setsockopt(connfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
@@ -199,9 +223,53 @@ int main(int argc, char ** argv){
       printf("IP address after bind: %s \n", server_ip_addr);
       printf("Port after bind: %d \n", ntohs(server_assigned.sin_port));
       
-
+      //XX TIMER HERE
       int server_port = ntohs(server_assigned.sin_port);
       Sendto(*sock_fd_array_iter, &server_port, sizeof(server_port),0, (SA *) &client, sizeof(client));
+      
+      //NEW NEEDS TO BE TESTED AND USED
+      //XX
+      
+      /*
+      //send port
+      ssize_t			n;
+      struct iovec	iovconn[2];
+      static struct msghdr msgconn;
+      
+      msgconn.msg_name = (SA*) &client;
+      msgconn.msg_namelen = sizeof(client);
+      msgconn.msg_iov = iovconn;
+      msgconn.msg_iovlen = 2;
+      sendhdr.window_size = s_window_size;
+      iovconn[0].iov_base = &sendhdr;
+      iovconn[0].iov_len = sizeof(struct hdr);
+      iovconn[1].iov_base = &server_port;
+      iovconn[1].iov_len = sizeof(server_port);
+      
+      Sendmsg(*sock_fd_array_iter, &msgconn, 0);
+      
+
+      //get ack/recvwindow
+      //timeout
+      char data_buf[10];
+      msgconn.msg_name = NULL;
+      msgconn.msg_namelen = 0;
+      iovconn[0].iov_base = &recvhdr;
+      iovconn[1].iov_base = data_buf;
+      iovconn[1].iov_len = sizeof(data_buf);
+      
+      Recvmsg(*sock_fd_array_iter, &msgconn,0);
+      
+      struct s_conn connection;
+      connection.send_base = 0;
+      connection.send_end = connection.send_base + s_window_size;
+      connection.dup_ack = 0;
+
+      // ZERO OUT FOR DATA TRANSFER
+      bzero(&sendhdr, sizeof(struct hdr));
+      bzero(&recvhdr, sizeof(struct hdr));
+
+      /*
       
       /*
 
@@ -227,16 +295,13 @@ int main(int argc, char ** argv){
 	exit(1);
       }
       
-
-      /*
-	CONNECTION SETUP
-      */
-
-      Signal(SIGALRM, sig_alrm);
+     
       
       int read_amount = 0;
-      //fread(buffer, 512, 1, fp1);
+      recvhdr.window_size = 10;
       while (!recvhdr.fin){
+	
+	Signal(SIGALRM, sig_alrm);
 
       sendagain:
 	if (rttinit == 0) {
@@ -245,14 +310,16 @@ int main(int argc, char ** argv){
 	  rtt_d_flag = 1;
 	}
 	
-	struct itimerval value = rtt_start(&rttinfo);
+	
+	value = rtt_start(&rttinfo);
 	printf("RTO %d \n", rttinfo.rtt_rto);
 	printf(" ALARM TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
 	printf(" ALARM TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
 	setitimer(ITIMER_REAL, &value, NULL);
 	//XX
 	//Currently just sends buffer without new read until it hits send_end
-	while(connection.seq_num <= connection.send_end){
+	// DOES THIS TERMINATE CORRECTLY? 
+	while((connection.seq_num <= connection.send_end) && recvhdr.window_size){
 	  read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
 	  payload[sizeof(payload) -1 ] = 0;
 	  Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
@@ -287,7 +354,11 @@ int main(int argc, char ** argv){
 
 	while(n = server_recv(connfd))
 	  {
+	    printf("Return from server_recv...\n");
 	    if (recvhdr.seq > connection.send_base){
+	      //turn timer off
+	      timerclear(&value.it_value);
+	      setitimer(ITIMER_REAL, &value , NULL);
 	      connection.send_base = recvhdr.seq;
 	      connection.send_end = connection.send_base + recvhdr.window_size;
 	      //reset retransmit num
@@ -295,11 +366,43 @@ int main(int argc, char ** argv){
 	      printf("ACK Received.");
 	      break;
 	    }
+
+	    //send probe forever until window size opens up
+	    if(!recvhdr.window_size)
+	      {
+		timeout_init(&rttinfo, &persistent_timer);
+		printf("Sending window probe...\n");
+		Signal(SIGALRM, window_probe);
+	      send_probe:
+
+		value = timeout_start(&persistent_timer);
+		printf("Probe timeout");
+		printf(" PROBE TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
+		printf(" PROBE TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
+		
+		setitimer(ITIMER_REAL, &value, NULL);
+
+		//timeout
+		if(sigsetjmp(jmpbuf_probe, 1) != 0)
+		  {
+		    printf("PROBE TIMEOUT \n");
+		    timeout_timeout(&persistent_timer);
+		    goto send_probe;
+		  }
+		
+		
+		//send probe
+		send_probe(connfd, (SA *) &client, sizeof(client));
+		//recv		 
+		//window size is still 0
+		while(recvhdr.window_size == 0)
+		  {
+		    recv_probe(connfd);
+		  }
+	      }
 	  }
-	
-
       }
-
+      
       /*
       END
       */      
@@ -317,6 +420,44 @@ int main(int argc, char ** argv){
 
   return 0;    
 }
+
+void
+timeout_init(struct rtt_info *ptr, struct timeout *mytimer)
+{
+  mytimer->timeout  = ptr->rtt_rto;
+}
+
+struct itimerval 
+timeout_start( struct timeout *mytimer)
+{
+  struct itimerval timerval; 
+
+  // You cannot specify more than one second in microseconds
+  timerval.it_value.tv_sec = mytimer->timeout / 1000;
+  // put leftover time in microsecond field
+  // remember, we are working with milliseconds
+  timerval.it_value.tv_usec = (mytimer->timeout % 1000) * 1000;
+  
+  timerval.it_interval.tv_sec = 0;
+  timerval.it_interval.tv_usec = 0;
+
+  return timerval;
+}
+int timeout_timeout(struct timeout *ptr)
+{
+  ptr->timeout *= 2;		/* next RTO */
+  
+  return(0);
+}
+
+static void 
+window_probe(int signo)
+{
+  printf("window probe called \n");
+  siglongjmp(jmpbuf_probe, 1);
+ 
+}
+
 
 static void 
 sig_alrm(int signo)
@@ -343,7 +484,7 @@ ssize_t server_recv(int fd)
   iovrecv[1].iov_base = inbuff;
   iovrecv[1].iov_len = sizeof(inbuff);
 
-  
+  printf("Before Recvmsg...\n");
   n = Recvmsg(fd, &msgrecv, 0);
   printf("INBUFFER!!! : %s", inbuff);
 
@@ -355,6 +496,43 @@ ssize_t server_recv(int fd)
 
 }
 
+void send_probe(int fd, const SA *destaddr, socklen_t destlen)
+{
+
+  static struct msghdr msgsend;
+  struct iovec iovsend[1];
+
+  msgsend.msg_name = destaddr;
+  msgsend.msg_namelen = destlen;
+  msgsend.msg_iov = iovsend;
+  msgsend.msg_iovlen = 1;
+  
+  sendhdr.probe = 1;
+  iovsend[0].iov_base = &sendhdr;
+  iovsend[0].iov_len = sizeof(struct hdr);
+
+  Sendmsg(fd, &msgsend, 0);
+
+  sendhdr.probe = 0;
+}
+
+void recv_probe(int fd)
+{
+  static struct msghdr msgrecv;
+  struct iovec iovrecv[1];
+  int n;
+
+  msgrecv.msg_name = NULL;
+  msgrecv.msg_namelen = 0;
+  msgrecv.msg_iov = iovrecv;
+  msgrecv.msg_iovlen = 1;
+  
+  iovrecv[0].iov_base = &recvhdr;
+  iovrecv[0].iov_len = sizeof(struct hdr);
+
+  n = Recvmsg(fd, &msgrecv, 0);
+
+}
 
 ssize_t Server_send(int fd, const void *outbuff,  size_t outbytes, 
 		    const SA *destaddr, socklen_t destlen, struct s_conn *connection)
@@ -380,11 +558,12 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   struct iovec	iovsend[2];
   static struct msghdr msgsend;
 
-  //increment where we are in receiver window
+  //increment where we are in sender window
   sendhdr.seq++;
   connection->seq_num = sendhdr.seq;
+  //decrement how much space recvwindow has
+  recvhdr.window_size--;
 
-  sendhdr.seq++;
   msgsend.msg_name = destaddr;
   msgsend.msg_namelen = destlen;
   msgsend.msg_iov = iovsend;
@@ -393,8 +572,6 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   iovsend[0].iov_len = sizeof(struct hdr);
   iovsend[1].iov_base = outbuff;
   iovsend[1].iov_len = outbytes;
-  
-  printf("OUTBUF: %s \n", outbuff);
 
 #ifdef	RTT_DEBUG
   fprintf(stderr, "send %4d: ", sendhdr.seq);
