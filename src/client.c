@@ -9,7 +9,7 @@
 void print(struct sockaddr_in *servaddr);
 uint32_t parseIPV4string(char* ipAddress);	/*Function for parsing the IP address*/
 static void recvfrom_alarm(int signo);
-void read_buffer(void *arg);	//Change to previous version
+void * read_buffer(void *arg);	//Change to previous version
 
 static struct hdr{
 	uint32_t seq;
@@ -109,7 +109,7 @@ int main(int argc, char **argv){
 
 /*--------------------------------------------------------------------------------------------------------------*/	
 	servaddr.sin_family = AF_INET;
-	servaddr.sin_port = htons(SERVER_PORT);
+	servaddr.sin_port = htons(port);
 	Inet_pton(AF_INET, IPserver, &servaddr.sin_addr.s_addr);
 
 	cliaddr.sin_family = AF_INET;
@@ -119,11 +119,12 @@ int main(int argc, char **argv){
 	/*Create UDP socket, bind it and use Getsockname() */
 	sockfd = Socket(AF_INET, SOCK_DGRAM , 0);
 	len = sizeof(cliaddr);
+	print(&cliaddr);
 	Bind(sockfd, (SA *)&cliaddr, len);
 	Getsockname(sockfd, (SA*)&cliaddr, &len);
 
 	
-	Inet_ntop(AF_INET, &(cliaddr.sin_addr), IP, INET_ADDRSTRLEN);
+	Inet_ntop(AF_INET, &(cliaddr.sin_addr.s_addr), IP, INET_ADDRSTRLEN);
 	printf("\nGetsockname Results: \nClient address: %s\nClient port number: %d\n", IP, ntohs(cliaddr.sin_port));
 
 	Connect(sockfd, (SA *)&servaddr, sizeof(servaddr));
@@ -203,8 +204,10 @@ int main(int argc, char **argv){
 			  
 			  memset(mynewbuf, 0, sizeof(mynewbuf));
 			  int n = Recvmsg(sockfd, &send, 0);
+			if(sendhdr.fin == 1)	break;
 			//printf("Message received: %s \n", mynewbuf);
-
+			mynewbuf[512-sizeof(struct hdr)] = 0;
+			
 			if (control < 1)
 			    {
 			      Sendmsg(sockfd, &send, 0);
@@ -222,7 +225,7 @@ int main(int argc, char **argv){
 			}
 			Pthread_join(&tid,NULL);
 			
-			printf("Shouldn't get to here \n");
+			//printf("Shouldn't get to here \n");
 			break;
 		}
 		if(FD_ISSET(pipefd[0], &rset)){
@@ -259,7 +262,7 @@ static void recvfrom_alarm(int signo){
 }
 
 /*** Change Start ***/
-void read_buffer(void *arg){
+void * read_buffer(void *arg){
 	
 	//printf("Inside thread\n");
 	int mean = 1.5;//*((int *) arg);
@@ -282,4 +285,3 @@ void read_buffer(void *arg){
 	}
 }
 /*** Change END ***/
-
