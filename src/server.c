@@ -230,7 +230,12 @@ int main(int argc, char ** argv){
 
       //get client info
       int readsize = 0;
+      addr_len = sizeof(client);
       readsize =Recvfrom(*sock_fd_array_iter, file_name, 1024,0, (SA *) &client, &addr_len);
+      
+      printf("CLIENT: \n");
+      print_sockaddr_in(&client);
+
       file_name[readsize] = 0;
       printf("File name requested: %s\n",file_name);
 
@@ -252,25 +257,26 @@ int main(int argc, char ** argv){
       //create new socket
       connfd = Socket(AF_INET, SOCK_DGRAM, 0);
       Setsockopt(connfd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-      if(local == TRUE){
-	Setsockopt(connfd, SOL_SOCKET, SO_DONTROUTE, &on, sizeof(on));
-      }
+      if(local == TRUE)
+	{
+	  Setsockopt(connfd, SOL_SOCKET, SO_DONTROUTE, &on, sizeof(on));
+	}
+
+
       server.sin_addr.s_addr = udp_sock_info_iter->ifi_addr.sin_addr.s_addr;
       server.sin_port = 0;
       server.sin_family = AF_INET;
-      Bind(connfd, (SA * ) &server, sizeof(server));
-
+      Bind(connfd, (SA * ) &server, sizeof(struct sockaddr_in));
       getsockname(connfd, (SA *) &server_assigned, &addr_len);
       char server_ip_addr[40];
       inet_ntop(AF_INET, &server_assigned.sin_addr.s_addr, server_ip_addr, 40);
+
       printf("IP address after bind: %s \n", server_ip_addr);
       printf("Port after bind: %d \n", ntohs(server_assigned.sin_port));
       
       int server_port = ntohs(server_assigned.sin_port);
 
       Sendto(*sock_fd_array_iter, &server_port, sizeof(server_port),0, (SA *) &client, sizeof(client));
-
-      printf("Error here \n");
 
       init_connection(&connection, s_window_size);
       
@@ -284,15 +290,6 @@ int main(int argc, char ** argv){
 
       */
 
-      /*ERROR */
-      
-      //if window locks
-      //set persistence timer
-      //if timer expires use window probes
-      //use exponential backoff for window probes
-      //keep sending until acked
-
-      //if timeout, you resend not yet acked segment and reset timer
       
       //Sendto(*sock_fd_array_iter, "Hi", sizeof(server_port),0, (SA *) &client, sizeof(client));
       
@@ -686,7 +683,7 @@ window_probe(int signo)
 static void 
 sig_alrm(int signo)
 {
-  printf("sig_alrm called \n");
+
   siglongjmp(jmpbuf, 1);
  
 }
