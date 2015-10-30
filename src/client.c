@@ -183,8 +183,6 @@ int main(int argc, char **argv){
 
 			printf("MY FILE NAME: %s  \n", file);
 			char mynewbuf[512];
-			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), (SA *) &servaddr, sizeof(servaddr))) > 0 ){
-			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), 0, 0)) > 0 ){
 			static struct msghdr send;
 			struct iovec iovsend[2];
 			
