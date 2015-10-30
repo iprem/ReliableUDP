@@ -11,8 +11,7 @@ int		rtt_d_flag = 0;		/* debug flag; can be set by caller */
 //rtt is scaled up by 4
 #define	RTT_RTOCALC(ptr) (((ptr)->rtt_srtt) >> 3) + (((ptr)->rtt_rttvar) >> 2)
 
-//XX
-//NOT BEING FACTORED INTO RTT START
+
 static float
 rtt_minmax(float rto)
 {
@@ -79,7 +78,7 @@ rtt_start(struct rtt_info *ptr)
   // put leftover time in microsecond field
   // remember, we are working with milliseconds
   timerval.it_value.tv_usec = (ptr->rtt_rto % 1000) * 1000;
-  
+
   timerval.it_interval.tv_sec = 0;
   timerval.it_interval.tv_usec = 0;
 
@@ -102,8 +101,8 @@ rtt_stop(struct rtt_info *ptr, uint32_t ms)
 {
 	int		delta;
 
-	//ptr->rtt_rtt = ms / 1000;		/* measured RTT in seconds */
 	ptr->rtt_rtt = ms ;		/* measured RTT in ms */
+	printf("MEASURED RTT: %d \n ", ms);
 
 	/*
 	 * Update our estimators of RTT and mean deviation of RTT.

@@ -37,10 +37,20 @@ struct udp_sock_info{
 };
 
 struct s_conn {
+  /* ack window */
   int send_base;
   int send_end;
+
   int seq_num;
 
+  /* congestion window  */
+  int cwnd;
+  int cwnd_linear_counter;
+
+
+  int ssthresh;
+  
+  int last_ack_num;
   int dup_ack;
 };
 
@@ -83,6 +93,7 @@ int timeout_timeout(struct timeout *ptr);
 struct itimerval timeout_start(struct timeout *timeout);
 void send_probe(int fd, const SA *destaddr, socklen_t destlen);
 void recv_probe(int fd);
+void init_connection(struct s_conn * connection, int s_window_size);
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
@@ -103,6 +114,8 @@ int main(int argc, char ** argv){
   ssize_t n;
   recvhdr.fin = 0;
   struct itimerval value;
+  struct s_conn connection;
+  
 
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
   
@@ -169,11 +182,7 @@ int main(int argc, char ** argv){
       //REMOVE IN FAVOR OF CONNECTION LOWER DOWN
       //XX
 
-      struct s_conn connection;
-      connection.send_base = 0;
-      connection.send_end = connection.send_base + s_window_size;
-      connection.dup_ack = 0;
-      
+      init_connection(&connection, s_window_size);
 
       //get ip and subnet destination by checking against stored fd/ip information
       while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
@@ -259,12 +268,9 @@ int main(int argc, char ** argv){
       iovconn[1].iov_len = sizeof(data_buf);
       
       Recvmsg(*sock_fd_array_iter, &msgconn,0);
-      
-      struct s_conn connection;
-      connection.send_base = 0;
-      connection.send_end = connection.send_base + s_window_size;
-      connection.dup_ack = 0;
 
+      init_connection(&connection, s_window_size);
+      
       // ZERO OUT FOR DATA TRANSFER
       bzero(&sendhdr, sizeof(struct hdr));
       bzero(&recvhdr, sizeof(struct hdr));
@@ -309,79 +315,188 @@ int main(int argc, char ** argv){
 	  rttinit = 1;
 	  rtt_d_flag = 1;
 	}
-	
+
+	printf("=============================================================== \n");
+	printf("SEND INFORMATION. \n");
+	printf("=============================================================== \n");
+
 	
 	value = rtt_start(&rttinfo);
-	printf("RTO %d \n", rttinfo.rtt_rto);
-	printf(" ALARM TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
-	printf(" ALARM TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
+	printf("RTO:  %d \n", rttinfo.rtt_rto);
+	//printf("ALARM TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
+	//printf("ALARM TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
 	setitimer(ITIMER_REAL, &value, NULL);
 	//XX
 	//Currently just sends buffer without new read until it hits send_end
-	// DOES THIS TERMINATE CORRECTLY? 
-	while((connection.seq_num <= connection.send_end) && recvhdr.window_size){
+
+	int cwnd_left = connection.cwnd;
+	while((connection.seq_num <= connection.send_end) && recvhdr.window_size && cwnd_left){
 	  read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
 	  payload[sizeof(payload) -1 ] = 0;
 	  Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
 		      &connection);
-
+	  cwnd_left--;
 	}
-	
+
+	if(!cwnd_left)
+	  {
+	    printf("HIT CWND \n");
+	    printf("CWND SIZE: %d \n", connection.cwnd);
+	  }
+	else if(!recvhdr.window_size)
+	  {
+	    printf("HIT RCWND \n");
+	  }
+	else if(connection.seq_num = connection.send_end)
+	  {
+	    printf("HIT SERVER WINDOW SIZE \n");
+	    printf("SEND END: %d \n",  connection.send_end);
+	    printf("SEND SEQ: %d \n",  connection.seq_num);
+	  }
 
 	//XX Right now this is a global timeout parameter not a packet specific timeout
 	if(sigsetjmp(jmpbuf, 1) != 0) {
 	  if (rtt_timeout(&rttinfo) < 0) {
-	    err_msg("dg_send_recv: no response from server, giving up");
+	    err_msg("Too many timeouts: no response from server, giving up");
 	    rttinit = 0;	/* reinit in case we're called again */
 	    errno = ETIMEDOUT;
 	    return(-1);
 	  }
 	  
 	  /*
-	    RETRANSMIT
+	    RETRANSMIT IF TIMEOUT OCCURS
 	  */
+
 	  //reset back to oldest unacked packet
 	  connection.seq_num = connection.send_base;
 	  sendhdr.seq = connection.send_base;
+	  
+	  //congestion avoidance
+	  connection.ssthresh = connection.cwnd / 2;
+	  connection.cwnd = 1;
+
 	  //restart from position in file corresponding to packet that needs to be retransmitted
 	  int offset  = connection.seq_num * sizeof(payload);
 	  fseek(fp1, offset, SEEK_SET);
+
 #ifdef	RTT_DEBUG
-	  err_msg("dg_send_recv: timeout, retransmitting");
+	  err_msg("timeout, retransmitting");
 #endif
 	  goto sendagain;
-	}	
+	}
 
+	/*
+	  PROCESS RECEIVED PACKETS FROM CLIENT
+	*/
+	
 	while(n = server_recv(connfd))
 	  {
-	    printf("Return from server_recv...\n");
-	    if (recvhdr.seq > connection.send_base){
-	      //turn timer off
-	      timerclear(&value.it_value);
-	      setitimer(ITIMER_REAL, &value , NULL);
-	      connection.send_base = recvhdr.seq;
-	      connection.send_end = connection.send_base + recvhdr.window_size;
-	      //reset retransmit num
-	      rtt_newpack(&rttinfo);
-	      printf("ACK Received.");
-	      break;
-	    }
+	    
+	    /* 
+	       DUPLICATE ACK 
+	    */
+	    if(recvhdr.seq == connection.last_ack_num)
+	      {
+		connection.dup_ack++;
+		if (connection.dup_ack == 3)
+		  {
+		    //reset back to oldest unacked packet
+		    connection.seq_num = connection.send_base;
+		    sendhdr.seq = connection.send_base;
+		  
+		    //congestion avoidance
+		    connection.ssthresh = connection.cwnd / 2;
+		    connection.cwnd = connection.ssthresh;
+		    
+		  //restart from position in file corresponding to packet that needs to be retransmitted
+		    int offset  = connection.seq_num * sizeof(payload);
+		    fseek(fp1, offset, SEEK_SET);
+		    
+		    goto sendagain;
+		  }
+	      }
+	    
+	    //NEW ACK
+	    if (recvhdr.seq > connection.send_base)
+	      {
+		printf("=============================================================== \n");
+		printf("New ack received. \n");
+		printf("=============================================================== \n");
+		
+		timerclear(&value.it_value);
+		setitimer(ITIMER_REAL, &value, NULL);
+				
+		//turn timer on for next oldest packet
+		value = rtt_start(&rttinfo);
+		setitimer(ITIMER_REAL, &value, NULL);
+		
+		printf(" Timer reset SECONDS: %d \n", value.it_value.tv_sec);
+		printf(" timer reset IN MS: %d \n", (value.it_value.tv_usec / 1000));
+		
+		//update ack window
+		connection.send_base = recvhdr.seq;
+		connection.send_end = connection.send_base + recvhdr.window_size;
+		
+		//reset duplicate ack counter
+		connection.dup_ack = 0;
+		
+		//increment cwnd
+		if(connection.cwnd != connection.ssthresh){ 
+		  connection.cwnd++;
+		  
+		  printf("Connection is in slow start. \n");
+		  printf("CWND Parameter: %d \n", connection.cwnd);
+		  printf("SSTHRESH Parameter: %d \n", connection.ssthresh);
+		}
+		//increment cwnd if linear
+		else if(connection.cwnd >= connection.ssthresh){
+		  printf("Connection is in congestion avoidance. \n");
+		  printf("CWND Parameter: %d \n", connection.cwnd);
+		  printf("SSTHRESH Parameter: %d \n", connection.ssthresh);
+		  
+		  connection.cwnd_linear_counter++;
+		  if(connection.cwnd_linear_counter == connection.cwnd)
+		    {
+		      connection.cwnd++;
+		      connection.cwnd_linear_counter = 0;
+		    }
+		}
+		
+		//reset retransmit num
+		rtt_newpack(&rttinfo);
+		
+		//record seq num for comparison to next ack
+		connection.last_ack_num = recvhdr.seq;
+		
+		//status information
+		printf("ACK Received. \n");
+		
+	      }
 
+	    /*
+	      RECV WINDOW 
+	    */
+	    
 	    //send probe forever until window size opens up
 	    if(!recvhdr.window_size)
 	      {
+
+		printf("=============================================================== \n");
+		printf("RECV Window is zero. \n");
+		printf("Begin probe.\n");
+		printf("=============================================================== \n");
+
 		timeout_init(&rttinfo, &persistent_timer);
 		printf("Sending window probe...\n");
 		Signal(SIGALRM, window_probe);
 	      send_probe:
 
 		value = timeout_start(&persistent_timer);
-		printf("Probe timeout");
-		printf(" PROBE TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
-		printf(" PROBE TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
-		
 		setitimer(ITIMER_REAL, &value, NULL);
-
+		
+		printf(" PROBE TIMEOUT SECONDS FIELD: %d \n", value.it_value.tv_sec);
+		printf(" PROBE TIMEOUT MS FIELD: %d \n", (value.it_value.tv_usec / 1000));
+		
 		//timeout
 		if(sigsetjmp(jmpbuf_probe, 1) != 0)
 		  {
@@ -389,7 +504,6 @@ int main(int argc, char ** argv){
 		    timeout_timeout(&persistent_timer);
 		    goto send_probe;
 		  }
-		
 		
 		//send probe
 		send_probe(connfd, (SA *) &client, sizeof(client));
@@ -422,6 +536,20 @@ int main(int argc, char ** argv){
 }
 
 void
+init_connection(struct s_conn *connection, int s_window_size)
+{
+  
+  connection->send_base = 0;
+  connection->send_end = connection->send_base + s_window_size;
+  connection->dup_ack = 0;
+  connection->cwnd = 1;
+  connection->cwnd_linear_counter = 1;
+  connection->ssthresh = s_window_size;
+
+}
+
+
+void
 timeout_init(struct rtt_info *ptr, struct timeout *mytimer)
 {
   mytimer->timeout  = ptr->rtt_rto;
@@ -443,7 +571,9 @@ timeout_start( struct timeout *mytimer)
 
   return timerval;
 }
-int timeout_timeout(struct timeout *ptr)
+
+int 
+timeout_timeout(struct timeout *ptr)
 {
   ptr->timeout *= 2;		/* next RTO */
   
@@ -484,13 +614,12 @@ ssize_t server_recv(int fd)
   iovrecv[1].iov_base = inbuff;
   iovrecv[1].iov_len = sizeof(inbuff);
 
-  printf("Before Recvmsg...\n");
   n = Recvmsg(fd, &msgrecv, 0);
-  printf("INBUFFER!!! : %s", inbuff);
+
+  //printf("Data received: %s \n", inbuff);
 
   rtt_stop(&rttinfo, rtt_ts(&rttinfo) - recvhdr.ts);
-
-  //set duplicate ack field
+  
   //set retransmit number
 
 
@@ -564,6 +693,7 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   //decrement how much space recvwindow has
   recvhdr.window_size--;
 
+
   msgsend.msg_name = destaddr;
   msgsend.msg_namelen = destlen;
   msgsend.msg_iov = iovsend;
@@ -574,7 +704,7 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   iovsend[1].iov_len = outbytes;
 
 #ifdef	RTT_DEBUG
-  fprintf(stderr, "send %4d: ", sendhdr.seq);
+  fprintf(stderr, "send %4d \n", sendhdr.seq);
 #endif
   
   sendhdr.ts = rtt_ts(&rttinfo);
