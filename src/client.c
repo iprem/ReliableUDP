@@ -1,5 +1,8 @@
-# include "unp.h"
-# include "unpifiplus.h"
+//A2 client
+
+#include "unp.h"
+#include "unpifiplus.h"
+#include <math.h>
 
 #define SERVER_PORT 2039	/*Change server port here*/
 #define DOALIASES 1
@@ -12,11 +15,12 @@ static void recvfrom_alarm(int signo);
 void * read_buffer(void *arg);	//Change to previous version
 
 static struct hdr{
-	uint32_t seq;
-	uint32_t ts;
-	int fin;
-	int window_size;
-	} sendhdr;
+  uint32_t seq;
+  uint32_t ts;
+  int fin;
+  int window_size;
+  int probe;
+} sendhdr;
 
 /*** Change Start ***/
 pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -177,11 +181,12 @@ int main(int argc, char **argv){
 			servaddr.sin_port = htons(serv_port);
 			Connect(sockfd, (SA *) &servaddr, sizeof(servaddr));
 
-			// Send acknowledgement of new connection ***Change start***
-			char *msg = "ACK";
-			Send(sockfd, msg, strlen(msg), 0);
+			//Send acknowledgement of new connection ***Change start***
+			//char *msg = "ACK";
+			//Send(sockfd, msg, strlen(msg), 0);
+			
 			/*** Change complete ***/
-
+			
 			printf("MY FILE NAME: %s  \n", file);
 			char mynewbuf[512];
 			static struct msghdr send;
@@ -189,7 +194,6 @@ int main(int argc, char **argv){
 			
 			Pthread_create(&tid, NULL, &read_buffer, mean);  /*Create thread*/
 
-			int control = 0;
 			while(1){
 			  send.msg_name = 0;
 			  send.msg_namelen = 0;
@@ -206,12 +210,6 @@ int main(int argc, char **argv){
 			//printf("Message received: %s \n", mynewbuf);
 			mynewbuf[512-sizeof(struct hdr)] = 0;
 			
-			if (control < 1)
-			    {
-			      Sendmsg(sockfd, &send, 0);
-			      control++;
-			    }			
-
 			/*** Change Start ***/
 			Pthread_mutex_lock(&buffer_mutex);
 			while(strlen(buffer) != 0)
@@ -247,16 +245,40 @@ void print(struct sockaddr_in *servaddr){
 
 }
 
-uint32_t parseIPV4string(char *ipAddress) {
-
-	char ipbytes[4];
-	sscanf(ipAddress, "%hhu.%hhu.%hhu.%hhu", &ipbytes[3], &ipbytes[2], &ipbytes[1], &ipbytes[0]);
-	return ipbytes[0] | ipbytes[1] << 8 | ipbytes[2] << 16 | ipbytes[3] << 24;
+uint32_t parseIPV4string(char *ipAddress) 
+{
+  char ipbytes[4];
+  sscanf(ipAddress, "%hhu.%hhu.%hhu.%hhu", &ipbytes[3], &ipbytes[2], &ipbytes[1], &ipbytes[0]);
+  return ipbytes[0] | ipbytes[1] << 8 | ipbytes[2] << 16 | ipbytes[3] << 24;
 }
 
-static void recvfrom_alarm(int signo){
-	Write(pipefd[1],"",1);	/*Write one null byte data to pipe*/
-	return;
+static void recvfrom_alarm(int signo)
+{
+  Write(pipefd[1],"",1);	/*Write one null byte data to pipe*/
+  return;
+}
+
+void send_ack(int fd, uint32_t seq_num, uint32_t ts, int window_size)
+{
+  static struct msghdr msgsend;
+  struct iovec iovsend[1];
+  
+  msgsend.msg_name = NULL;
+  msgsend.msg_namelen = 0;
+  msgsend.msg_iov = iovsend;
+  msgsend.msg_iovlen = 1;
+  
+  sendhdr.probe = 1;
+  iovsend[0].iov_base = &sendhdr;
+  iovsend[0].iov_len = sizeof(struct hdr);
+
+  sendhdr.seq = seq_num;
+  sendhdr.ts = ts;
+  sendhdr.window_size = window_size;
+  sendhdr.probe = 0;
+  sendhdr.fin = 0; 
+
+  Sendmsg(fd, &msgsend, 0);
 }
 
 /*** Change Start ***/

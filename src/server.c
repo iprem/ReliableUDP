@@ -71,16 +71,17 @@ static struct hdr {
 
 
 #define MAX_IF_NUM 10
+#define MAX_CONNECTED_PEERS 10
 #define PREM_PORT 2038
 #define LOCALHOST_PORT 8888
 #define TRUE 1
 #define FALSE 0
 #define ACK_SIZE 100
 #define RTT_DEBUG
-#define PAYLOAD_SIZE    20    
+#define PAYLOAD_SIZE    512
 static int rttinit = 0;
 static struct rtt_info   rttinfo;
-static sigjmp_buf	jmpbuf, jmpbuf_probe;
+static sigjmp_buf	jmpbuf, jmpbuf_probe, jmpbuf_init_conn;
 
 
 void bind_sock(int * arr, struct udp_sock_info * sock_info);
@@ -88,12 +89,20 @@ void print_sock_info(struct udp_sock_info * sock_info, int buff_size);
 void print_sockaddr_in(struct sockaddr_in * to_print);
 static void sig_alrm(int signo);
 static void window_probe(int signo);
+static void  init_conn_timer(int signo);
 void timeout_init(struct rtt_info *ptr, struct timeout *mytimer);
 int timeout_timeout(struct timeout *ptr);
 struct itimerval timeout_start(struct timeout *timeout);
 void send_probe(int fd, const SA *destaddr, socklen_t destlen);
 void recv_probe(int fd);
 void init_connection(struct s_conn * connection, int s_window_size);
+int add_connected_peer(int fd , struct udp_sock_info * connected_peer_list, int size, int peer_num);
+int remove_connected_peer(struct udp_sock_info * connected_peer_list, int connfd, int peer_num);
+ssize_t server_send(int fd, const void *outbuff, size_t outbytes, 
+		    const SA *destaddr, socklen_t destlen, struct s_conn *connection, int flag);
+ssize_t Server_send(int fd, const void *outbuff,  size_t outbytes, 
+		    const SA *destaddr, socklen_t destlen, struct s_conn *connection, int flag);
+
 
 int main(int argc, char ** argv){
   //maybe inintialize to -1
@@ -103,6 +112,11 @@ int main(int argc, char ** argv){
   struct udp_sock_info  * udp_sock_info_iter  = udp_sock_info_arr; 
   struct sockaddr_in  server, server_assigned;
   struct sockaddr_in client;
+  struct sockaddr_in ack_client;
+  
+  
+  struct udp_sock_info  connected_peer_list[MAX_CONNECTED_PEERS];
+  struct udp_sock_info  *connected_peer_iter = connected_peer_list;
   fd_set rset;
   int port, s_window_size, i, max, local, connfd, numRead;
   const int on = 1;
@@ -115,26 +129,39 @@ int main(int argc, char ** argv){
   recvhdr.fin = 0;
   struct itimerval value;
   struct s_conn connection;
-  
+  int retry =0;  
+  char ack_buf[1024];
+
 
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
   
   //initialize so we can loop and print later
-  for(i = 0; i < MAX_IF_NUM; i++){
-    (*udp_sock_info_iter).sockfd = -1;
-    udp_sock_info_iter++;
-  }
+  for(i = 0; i < MAX_IF_NUM; i++)
+    {
+      (*udp_sock_info_iter).sockfd = -1;
+      udp_sock_info_iter++;
+    }
+  //reset iter
   udp_sock_info_iter = udp_sock_info_arr;
 
+  memset(connected_peer_list, 0, MAX_CONNECTED_PEERS * sizeof(struct udp_sock_info));
+  for(i=0; i < MAX_CONNECTED_PEERS; i++)
+    {
+      connected_peer_iter->sockfd = -1;
+      connected_peer_iter++;
+    }
+  //reset iter
+  connected_peer_iter = connected_peer_list;
 
   if(argc != 2)	err_quit("Usage: ./server server.in");
   
   fp = fopen(argv[1],"r");
   
-  if(fp == NULL){
-    printf("Error opening file\n");
-    exit(1);
-  }
+  if(fp == NULL)
+    {
+      printf("Error opening file\n");
+      exit(1);
+    }
   
 
   //read arguments from server.in
@@ -165,10 +192,25 @@ int main(int argc, char ** argv){
     //read in book
     pselect(max + 1, &rset, 0, 0, 0, 0 );
     
-    while(!FD_ISSET(*sock_fd_array_iter, &rset)){
-      sock_fd_array_iter++;
-    }
-    
+    while(!FD_ISSET(*sock_fd_array_iter, &rset))
+      {
+	sock_fd_array_iter++;
+      }
+
+    //DO NOT FORK A NEW CHILD FOR AN ALREADY CONNECTED PEER
+    if(in_connected_peers(*sock_fd_array_iter, connected_peer_list, MAX_CONNECTED_PEERS))
+      {
+	//char junkbuf[1024];
+	//recv(*sock_fd_array_iter, junkbuf, 1024, 0);
+	printf("Peer is already connected. \n"); 
+	//printf("Throwing away following data.... \n");
+	//printf("%s \n", junkbuf);
+
+      }
+    else
+      {
+	add_connected_peer(*sock_fd_array_iter, connected_peer_list, sizeof(struct sockaddr_in), MAX_CONNECTED_PEERS);
+      }
 
     /*
 
@@ -177,10 +219,6 @@ int main(int argc, char ** argv){
     */
 
     if((child = Fork()) == 0){
-      //REMOVE IN FAVOR OF CONNECTION LOWER DOWN
-      //XX
-
-      init_connection(&connection, s_window_size);
 
       //get ip and subnet destination by checking against stored fd/ip information
       while (*sock_fd_array_iter != udp_sock_info_iter->sockfd)
@@ -195,8 +233,6 @@ int main(int argc, char ** argv){
       readsize =Recvfrom(*sock_fd_array_iter, file_name, 1024,0, (SA *) &client, &addr_len);
       file_name[readsize] = 0;
       printf("File name requested: %s\n",file_name);
-
-      printf("AFTER FILE NAME \n");
 
       if (subnet_dest == subnet_dest & client.sin_addr.s_addr){
 	local = TRUE;
@@ -230,54 +266,21 @@ int main(int argc, char ** argv){
       printf("IP address after bind: %s \n", server_ip_addr);
       printf("Port after bind: %d \n", ntohs(server_assigned.sin_port));
       
-      //XX TIMER HERE
       int server_port = ntohs(server_assigned.sin_port);
-      Sendto(*sock_fd_array_iter, &server_port, sizeof(server_port),0, (SA *) &client, sizeof(client));
-      
-      //NEW NEEDS TO BE TESTED AND USED
-      //XX
-      
-      /*
-      //send port
-      ssize_t			n;
-      struct iovec	iovconn[2];
-      static struct msghdr msgconn;
-      
-      msgconn.msg_name = (SA*) &client;
-      msgconn.msg_namelen = sizeof(client);
-      msgconn.msg_iov = iovconn;
-      msgconn.msg_iovlen = 2;
-      sendhdr.window_size = s_window_size;
-      iovconn[0].iov_base = &sendhdr;
-      iovconn[0].iov_len = sizeof(struct hdr);
-      iovconn[1].iov_base = &server_port;
-      iovconn[1].iov_len = sizeof(server_port);
-      
-      Sendmsg(*sock_fd_array_iter, &msgconn, 0);
-      
 
-      //get ack/recvwindow
-      //timeout
-      char data_buf[10];
-      msgconn.msg_name = NULL;
-      msgconn.msg_namelen = 0;
-      iovconn[0].iov_base = &recvhdr;
-      iovconn[1].iov_base = data_buf;
-      iovconn[1].iov_len = sizeof(data_buf);
-      
-      Recvmsg(*sock_fd_array_iter, &msgconn,0);
+      Sendto(*sock_fd_array_iter, &server_port, sizeof(server_port),0, (SA *) &client, sizeof(client));
+
+      printf("Error here \n");
 
       init_connection(&connection, s_window_size);
       
       // ZERO OUT FOR DATA TRANSFER
       bzero(&sendhdr, sizeof(struct hdr));
       bzero(&recvhdr, sizeof(struct hdr));
-
-      /*
       
       /*
 
-      SEND ON NEW CONNFD
+      CONNECTED ON NEW FD
 
       */
 
@@ -291,7 +294,7 @@ int main(int argc, char ** argv){
 
       //if timeout, you resend not yet acked segment and reset timer
       
-      Sendto(*sock_fd_array_iter, "Hi", sizeof(server_port),0, (SA *) &client, sizeof(client));
+      //Sendto(*sock_fd_array_iter, "Hi", sizeof(server_port),0, (SA *) &client, sizeof(client));
       
       fp1 = fopen(file_name,"r");
       if(fp1 == NULL){
@@ -326,15 +329,21 @@ int main(int argc, char ** argv){
 	//printf("ALARM TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
 	//printf("ALARM TIMEOUT IN MS: %d \n", (value.it_value.tv_usec / 1000));
 	setitimer(ITIMER_REAL, &value, NULL);
-	//XX
-	//Currently just sends buffer without new read until it hits send_end
 
 	int cwnd_left = connection.cwnd;
 	while((connection.seq_num <= connection.send_end) && recvhdr.window_size && cwnd_left){
 	  read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
-	  payload[sizeof(payload) -1 ] = 0;
-	  Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
-		      &connection);
+	  if (read_amount == 0)
+	    {
+	      payload[0] = '0';
+	      Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
+			  &connection, 1);
+	    }
+	  else{
+	    payload[sizeof(payload) -1 ] = 0;
+	    Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
+			&connection, 0);
+	  }
 	  cwnd_left--;
 	}
 
@@ -395,6 +404,13 @@ int main(int argc, char ** argv){
 	    /* 
 	       DUPLICATE ACK 
 	    */
+
+	    if (recvhdr.fin == 1)
+	      {
+		printf("Client has finished. \n");
+		exit(0);
+	      }
+	      
 	    if(recvhdr.seq == connection.last_ack_num)
 	      {
 		connection.dup_ack++;
@@ -531,7 +547,8 @@ int main(int argc, char ** argv){
   }
 
   return 0;    
-}
+  }
+
 
 void
 init_connection(struct s_conn *connection, int s_window_size)
@@ -545,6 +562,78 @@ init_connection(struct s_conn *connection, int s_window_size)
   connection->ssthresh = s_window_size / 2;
 
 }
+
+int in_connected_peers(int fd, struct udp_sock_info * connected_peer_list, int peer_num)
+{
+  struct sockaddr_in client;
+  int i;
+  socklen_t len = sizeof(client);
+  char junkbuf[1024];
+  
+
+  //memset(&peer, 0, sizeof(struct sockaddr_in));
+  Recvfrom(fd, junkbuf, 1024 , MSG_PEEK, (SA *) &client, &len);
+  //Recvfrom(fd, junkbuf, 1024 , 0, (SA *) &client, &len);
+
+  
+  for(i=0; i < peer_num; i++)
+    {
+      if (ntohl(client.sin_addr.s_addr) == ntohl(connected_peer_list->ifi_addr.sin_addr.s_addr))
+	{
+	  return 1;
+	}
+      connected_peer_list++;
+    }
+  
+  return 0;
+  
+}
+ 
+int
+add_connected_peer(int fd , struct udp_sock_info * connected_peer_list, int size, int peer_num){
+  struct udp_sock_info * connected_peer_iter = connected_peer_list; 
+  int err = 1;
+  int i; 
+  char junkbuf[10];
+  
+
+  for(i=0; i < peer_num; i++)
+    {
+     if( connected_peer_iter->sockfd = -1)
+       {
+	 Recvfrom(fd, junkbuf, 10 , MSG_DONTWAIT | MSG_PEEK, (SA *) &(connected_peer_iter->ifi_addr), &size );	 
+	 printf("Adding peer...\n");
+	 err = 0;
+	 break;
+       }
+      connected_peer_iter++;
+    }
+
+  return err;
+}
+
+int
+remove_connected_peer(struct udp_sock_info * connected_peer_list, int connfd, int peer_num){
+
+  struct udp_sock_info  * connected_peer_iter = connected_peer_list; 
+  int err = 1;
+  int i;
+
+  for(i=0; i < peer_num; i++)
+    {
+     if( connected_peer_iter->sockfd = connfd)
+       {
+	 memset(connected_peer_iter, 0, sizeof(struct udp_sock_info));
+	 err = 0;
+	 break;
+       }
+      connected_peer_iter++;
+    }
+
+  return err;
+}
+
+
 
 
 void
@@ -577,6 +666,13 @@ timeout_timeout(struct timeout *ptr)
   
   return(0);
 }
+
+static void 
+init_conn_timer(int signo)
+{
+  siglongjmp(jmpbuf_init_conn, 1);
+ }
+
 
 static void 
 window_probe(int signo)
@@ -661,12 +757,12 @@ void recv_probe(int fd)
 }
 
 ssize_t Server_send(int fd, const void *outbuff,  size_t outbytes, 
-		    const SA *destaddr, socklen_t destlen, struct s_conn *connection)
+		    const SA *destaddr, socklen_t destlen, struct s_conn *connection, int flag)
 {
 
   ssize_t n;
 
-  n = server_send(fd, outbuff, outbytes, destaddr, destlen, connection);
+  n = server_send(fd, outbuff, outbytes, destaddr, destlen, connection, flag);
 
   if (n < 0)
     err_quit("server_send error");
@@ -677,7 +773,7 @@ ssize_t Server_send(int fd, const void *outbuff,  size_t outbytes,
 }
 
 ssize_t server_send(int fd, const void *outbuff, size_t outbytes, 
-		    const SA *destaddr, socklen_t destlen, struct s_conn *connection)
+		    const SA *destaddr, socklen_t destlen, struct s_conn *connection, int flag)
 {
 
   ssize_t			n;
@@ -705,6 +801,11 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
 #endif
   
   sendhdr.ts = rtt_ts(&rttinfo);
+
+  if(flag == 1){
+    sendhdr.fin = 0;
+  }
+
   Sendmsg(fd, &msgsend, 0);
 
 }
