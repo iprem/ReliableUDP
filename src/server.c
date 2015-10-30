@@ -119,8 +119,6 @@ int main(int argc, char ** argv){
 
   memset(sock_fd_array, 0, MAX_IF_NUM * sizeof(int));
   
-  
-
   //initialize so we can loop and print later
   for(i = 0; i < MAX_IF_NUM; i++){
     (*udp_sock_info_iter).sockfd = -1;
@@ -320,7 +318,9 @@ int main(int argc, char ** argv){
 	printf("SEND INFORMATION. \n");
 	printf("=============================================================== \n");
 
-	
+	timerclear(&value.it_value);
+	setitimer(ITIMER_REAL, &value, NULL);
+
 	value = rtt_start(&rttinfo);
 	printf("RTO:  %d \n", rttinfo.rtt_rto);
 	//printf("ALARM TIMEOUT SECONDS: %d \n", value.it_value.tv_sec);
@@ -426,13 +426,6 @@ int main(int argc, char ** argv){
 		timerclear(&value.it_value);
 		setitimer(ITIMER_REAL, &value, NULL);
 				
-		//turn timer on for next oldest packet
-		value = rtt_start(&rttinfo);
-		setitimer(ITIMER_REAL, &value, NULL);
-		
-		printf(" Timer reset SECONDS: %d \n", value.it_value.tv_sec);
-		printf(" timer reset IN MS: %d \n", (value.it_value.tv_usec / 1000));
-		
 		//update ack window
 		connection.send_base = recvhdr.seq;
 		connection.send_end = connection.send_base + recvhdr.window_size;
@@ -441,9 +434,12 @@ int main(int argc, char ** argv){
 		connection.dup_ack = 0;
 		
 		//increment cwnd
-		if(connection.cwnd != connection.ssthresh){ 
-		  connection.cwnd++;
-		  
+		//if you increment cwnd endlessly you could have an integer overflow
+		if(connection.cwnd < connection.ssthresh){ 
+		  if (connection.cwnd < s_window_size)
+		    {
+		      connection.cwnd++;
+		    }
 		  printf("Connection is in slow start. \n");
 		  printf("CWND Parameter: %d \n", connection.cwnd);
 		  printf("SSTHRESH Parameter: %d \n", connection.ssthresh);
@@ -457,7 +453,10 @@ int main(int argc, char ** argv){
 		  connection.cwnd_linear_counter++;
 		  if(connection.cwnd_linear_counter == connection.cwnd)
 		    {
-		      connection.cwnd++;
+		      if (connection.cwnd < s_window_size)
+			{
+			  connection.cwnd++;
+			}
 		      connection.cwnd_linear_counter = 0;
 		    }
 		}
@@ -467,9 +466,8 @@ int main(int argc, char ** argv){
 		
 		//record seq num for comparison to next ack
 		connection.last_ack_num = recvhdr.seq;
-		
-		//status information
-		printf("ACK Received. \n");
+
+		break;
 		
 	      }
 
@@ -544,7 +542,7 @@ init_connection(struct s_conn *connection, int s_window_size)
   connection->dup_ack = 0;
   connection->cwnd = 1;
   connection->cwnd_linear_counter = 1;
-  connection->ssthresh = s_window_size;
+  connection->ssthresh = s_window_size / 2;
 
 }
 
@@ -617,7 +615,6 @@ ssize_t server_recv(int fd)
   n = Recvmsg(fd, &msgrecv, 0);
 
   //printf("Data received: %s \n", inbuff);
-
   rtt_stop(&rttinfo, rtt_ts(&rttinfo) - recvhdr.ts);
   
   //set retransmit number
