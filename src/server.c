@@ -307,7 +307,7 @@ int main(int argc, char ** argv){
 
 	int cwnd_left = connection.cwnd;
 	while((connection.seq_num <= connection.send_end) && recvhdr.window_size && cwnd_left){
-	  read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
+	  read_amount = fread(payload, 1 , (sizeof(payload) -1), fp1);
 	  if (read_amount == 0 && fin_state == 0)
 	    {
 	      //we have sent a fin
@@ -315,8 +315,7 @@ int main(int argc, char ** argv){
 	      payload[0] = '\0';
 	      Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
 			  &connection, 1);
-	      printf("Payload: %s \n", payload);
-	      printf("Length of final payload: %d \n", strlen(payload));
+	      printf("Read amount: %d \n", read_amount);
 	    }
 	  else{
 	    //more data needed so exit fin
@@ -324,6 +323,7 @@ int main(int argc, char ** argv){
 	    payload[sizeof(payload) -1 ] = 0;
 	    Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
 			&connection, 0);
+	    printf("FREAD AMOUNT: %d \n", read_amount);
 	  }
 	  cwnd_left--;
 	}
