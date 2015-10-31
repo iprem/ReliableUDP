@@ -228,15 +228,15 @@ int main(int argc, char **argv){
 		
 			  mynewbuf[512-sizeof(struct hdr)] = 0;
 			
-			 //printf("Message received: \n %s\n", buffer);
+			printf("Message received: \n %s\n", mynewbuf);
 			//strcpy(buffer,"");
 			win_size--;
 			/*** Change Start ***/
-			Pthread_mutex_lock(&buffer_mutex);
+			/*Pthread_mutex_lock(&buffer_mutex);
 			while(strlen(buffer) != 0)
 					Pthread_cond_wait (&buffer_cond, &buffer_mutex);
 			strcat(buffer,mynewbuf);
-			Pthread_mutex_unlock(&buffer_mutex);
+			Pthread_mutex_unlock(&buffer_mutex);*/
 			/*** Change End ***/	
 		  	if(recvhdr.fin == 1)
 			    {
@@ -289,7 +289,7 @@ static void recvfrom_alarm(int signo){
 /*** Change Start ***/
 void * read_buffer(int arg){
 	
-	printf("Inside thread\n");
+	//printf("Inside thread\n");
 	int mean = arg;
 	int bytes_read = 0;	
 	int wait;
@@ -297,7 +297,7 @@ void * read_buffer(int arg){
 
 	while(1){
 		Pthread_mutex_lock(&buffer_mutex);
-		printf("\nSize%d\n",sizeof(buffer));
+		//printf("\nSize%d\n",sizeof(buffer));
 		printf("%s", buffer);
 		strcpy(buffer,"");
 		Pthread_cond_signal(&buffer_cond);
