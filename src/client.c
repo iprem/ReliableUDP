@@ -22,7 +22,7 @@ static struct hdr{
 /*** Change Start ***/
 pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t  buffer_cond  = PTHREAD_COND_INITIALIZER;
-static char** recv_buffer;
+static char buffer[2048];
 static int pipefd[2];
 static int win_size;
 int max_win_size;
@@ -70,8 +70,6 @@ int main(int argc, char **argv){
 	if(prob<0.0 || prob>1.0)		err_quit("Probability should be in range[0,1]\n");
 	if( (win_size < 0) || (mean < 0) )	err_quit("Window size or mean controlling rate should be positive\n");
 	
-	char buffer[win_size][512- sizeof(struct hdr)];
-	recv_buffer = buffer;
 	max_win_size = win_size;
 	recvhdr.fin = 0;
 	
@@ -225,35 +223,34 @@ int main(int argc, char **argv){
 			  
 
 			  memset(mynewbuf, 0, sizeof(mynewbuf));
-			  printf("Sizeof RECV: %d\n",sizeof(recv));
+			  //printf("Sizeof RECV: %d\n",sizeof(recv));
 			  Recvmsg(sockfd, &recv, 0);
-			  printf("After Receive\n");
-			  if(recvhdr.fin == 1)
+			  //printf("After Receive\n");
+		
+			  mynewbuf[512-sizeof(struct hdr)] = 0;
+			//strcat(buffer,mynewbuf);
+			 printf("Message received: \n %s\n", mynewbuf);
+			strcpy(buffer,"");
+			win_size--;
+			/*** Change Start ***/
+			/*Pthread_mutex_lock(&buffer_mutex);
+			while(strlen(buffer) != 0)
+					Pthread_cond_wait (&buffer_cond, &buffer_mutex);
+			Pthread_mutex_unlock(&buffer_mutex);*/
+			/*** Change End ***/	
+		  	if(recvhdr.fin == 1)
 			    {
 			      printf("Recieved fin... \n");
 			      break;
 			    }
-			  mynewbuf[strlen(mynewbuf)] = 0;
-			  printf("Message received: \n %s", mynewbuf);
-
-			/*** Change Start ***/
-			/*Pthread_mutex_lock(&buffer_mutex);
-			while((max_win_size - win_size) != 0)
-					Pthread_cond_wait (&buffer_cond, &buffer_mutex);
-			strcat(buffer[max_win_size - win_size],mynewbuf);
-			win_size--;
-			Pthread_mutex_unlock(&buffer_mutex);*/
-			/*** Change End ***/	
-		  
 			sendhdr.window_size = win_size;
 			sendhdr.seq = recvhdr.seq;
-			printf("\nSequence Number: %d",sendhdr.seq);
 			Sendmsg(sockfd, &send, 0);	
 			}
-
-			Pthread_join(&tid,NULL);
+			sendhdr.fin = 1;
+			Sendmsg(sockfd, &send, 0);
+			while(pthread_join(&tid,NULL) == ESRCH);
 			
-			//printf("Shouldn't get to here \n");
 			break;
 		}
 		if(FD_ISSET(pipefd[0], &rset)){
@@ -300,11 +297,8 @@ void * read_buffer(void *arg){
 
 	while(1){
 		Pthread_mutex_lock(&buffer_mutex);
-		for( i = 0; i< (max_win_size - win_size) ; i++){
-			printf("%s",recv_buffer[i]);
-			win_size++;
-		}
-		strcpy(recv_buffer[i],"");
+		printf("%s", buffer);
+		strcpy(buffer,"");
 		Pthread_cond_signal(&buffer_cond);
 		Pthread_mutex_unlock(&buffer_mutex);
 		wait = -1*mean*log((rand() %100)/100.0);
