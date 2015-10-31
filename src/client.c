@@ -1,8 +1,5 @@
-//A2 client
-
-#include "unp.h"
-#include "unpifiplus.h"
-#include <math.h>
+# include "unp.h"
+# include "unpifiplus.h"
 
 #define SERVER_PORT 2039	/*Change server port here*/
 #define DOALIASES 1
@@ -15,18 +12,21 @@ static void recvfrom_alarm(int signo);
 void * read_buffer(void *arg);	//Change to previous version
 
 static struct hdr{
-  uint32_t seq;
-  uint32_t ts;
-  int fin;
-  int window_size;
-  int probe;
-} sendhdr;
+	uint32_t seq;
+	uint32_t ts;
+	int fin;
+	int window_size;
+	int probe;
+	} sendhdr,recvhdr;
 
 /*** Change Start ***/
 pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t  buffer_cond  = PTHREAD_COND_INITIALIZER;
-char buffer[2048];
+static char** recv_buffer;
 static int pipefd[2];
+static int win_size;
+int max_win_size;
+
 /*** Change End ***/
 
 int main(int argc, char **argv){
@@ -46,7 +46,7 @@ int main(int argc, char **argv){
 	struct sockaddr_in servaddr, cliaddr, peer;
 	char send_ack[MAXLINE+1] = "ACK";
 	pthread_t tid;
-	
+
 	if(argc != 2)	err_quit("Usage: udpcli client.in");
 	
 	FILE *fp = fopen(argv[1],"r");		/*Open the file passed as argument in read mode*/
@@ -70,7 +70,10 @@ int main(int argc, char **argv){
 	if(prob<0.0 || prob>1.0)		err_quit("Probability should be in range[0,1]\n");
 	if( (win_size < 0) || (mean < 0) )	err_quit("Window size or mean controlling rate should be positive\n");
 	
-	//print(&servaddr);
+	char buffer[win_size][512- sizeof(struct hdr)];
+	recv_buffer = buffer;
+	max_win_size = win_size;
+	recvhdr.fin = 0;
 	
 	family = AF_INET;
 
@@ -181,22 +184,38 @@ int main(int argc, char **argv){
 			servaddr.sin_port = htons(serv_port);
 			Connect(sockfd, (SA *) &servaddr, sizeof(servaddr));
 
-			//Send acknowledgement of new connection ***Change start***
-			//char *msg = "ACK";
-			//Send(sockfd, msg, strlen(msg), 0);
-			
+			// Send acknowledgement of new connection /***Change start***/
+			char *msg = "ACK";
+			Send(sockfd, msg, strlen(msg), 0);
 			/*** Change complete ***/
 			
-			printf("MY FILE NAME: %s  \n", file);
-			char mynewbuf[512];
-			static struct msghdr send;
-			struct iovec iovsend[2];
-			
-			Pthread_create(&tid, NULL, &read_buffer, mean);  /*Create thread*/
+			//Receive window size from 
 
+			printf("MY FILE NAME: %s  \n", file);
+			char mynewbuf[1024];
+			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), (SA *) &servaddr, sizeof(servaddr))) > 0 ){
+			//while( (n = Dg_send_recv(sockfd, send_ack, sizeof(send_ack), buff, sizeof(buff), 0, 0)) > 0 ){
+			static struct msghdr send, recv;
+			struct iovec iovsend[2],iovrecv[2];
+			
+			recv.msg_name = 0;
+			recv.msg_namelen = 0;
+			  recv.msg_iov = iovrecv;
+			  recv.msg_iovlen = 2;
+			  iovrecv[0].iov_base = &recvhdr;
+			  iovrecv[0].iov_len = sizeof(struct hdr);
+			  iovrecv[1].iov_base = mynewbuf;
+			  iovrecv[1].iov_len = sizeof(mynewbuf);
+
+
+			Pthread_create(&tid, NULL, &read_buffer, mean);  /*Create thread*/
+			
+			
+		
+			int control = 0;
 			while(1){
-			  send.msg_name = 0;
-			  send.msg_namelen = 0;
+			send.msg_name = 0;
+			send.msg_namelen = sizeof(servaddr);
 			  send.msg_iov = iovsend;
 			  send.msg_iovlen = 2;
 			  iovsend[0].iov_base = &sendhdr;
@@ -204,21 +223,30 @@ int main(int argc, char **argv){
 			  iovsend[1].iov_base = mynewbuf;
 			  iovsend[1].iov_len = sizeof(mynewbuf);
 			  
-			  memset(mynewbuf, 0, sizeof(mynewbuf));
-			  int n = Recvmsg(sockfd, &send, 0);
-			if(sendhdr.fin == 1)	break;
-			//printf("Message received: %s \n", mynewbuf);
-			mynewbuf[512-sizeof(struct hdr)] = 0;
-			
+
+			memset(mynewbuf, 0, sizeof(mynewbuf));
+			printf("Sizeof RECV: %d\n",sizeof(recv));
+			Recvmsg(sockfd, &recv, 0);
+			printf("After Receive\n");
+			if(recvhdr.fin == 1)	break;
+			mynewbuf[strlen(mynewbuf)] = 0;
+			printf("Message received: %s \n", mynewbuf);
+
 			/*** Change Start ***/
-			Pthread_mutex_lock(&buffer_mutex);
-			while(strlen(buffer) != 0)
+			/*Pthread_mutex_lock(&buffer_mutex);
+			while((max_win_size - win_size) != 0)
 					Pthread_cond_wait (&buffer_cond, &buffer_mutex);
-			strcat(buffer,buff);
-			Pthread_mutex_unlock(&buffer_mutex);
-			/*** Change End ***/
-			  
+			strcat(buffer[max_win_size - win_size],mynewbuf);
+			win_size--;
+			Pthread_mutex_unlock(&buffer_mutex);*/
+			/*** Change End ***/	
+		  
+			sendhdr.window_size = win_size;
+			sendhdr.seq = recvhdr.seq;
+			printf("\nSequence Number: %d",sendhdr.seq);
+			Sendmsg(sockfd, &send, 0);	
 			}
+
 			Pthread_join(&tid,NULL);
 			
 			//printf("Shouldn't get to here \n");
@@ -245,62 +273,38 @@ void print(struct sockaddr_in *servaddr){
 
 }
 
-uint32_t parseIPV4string(char *ipAddress) 
-{
-  char ipbytes[4];
-  sscanf(ipAddress, "%hhu.%hhu.%hhu.%hhu", &ipbytes[3], &ipbytes[2], &ipbytes[1], &ipbytes[0]);
-  return ipbytes[0] | ipbytes[1] << 8 | ipbytes[2] << 16 | ipbytes[3] << 24;
+uint32_t parseIPV4string(char *ipAddress) {
+
+	char ipbytes[4];
+	sscanf(ipAddress, "%hhu.%hhu.%hhu.%hhu", &ipbytes[3], &ipbytes[2], &ipbytes[1], &ipbytes[0]);
+	return ipbytes[0] | ipbytes[1] << 8 | ipbytes[2] << 16 | ipbytes[3] << 24;
 }
 
-static void recvfrom_alarm(int signo)
-{
-  Write(pipefd[1],"",1);	/*Write one null byte data to pipe*/
-  return;
-}
-
-void send_ack(int fd, uint32_t seq_num, uint32_t ts, int window_size)
-{
-  static struct msghdr msgsend;
-  struct iovec iovsend[1];
-  
-  msgsend.msg_name = NULL;
-  msgsend.msg_namelen = 0;
-  msgsend.msg_iov = iovsend;
-  msgsend.msg_iovlen = 1;
-  
-  sendhdr.probe = 1;
-  iovsend[0].iov_base = &sendhdr;
-  iovsend[0].iov_len = sizeof(struct hdr);
-
-  sendhdr.seq = seq_num;
-  sendhdr.ts = ts;
-  sendhdr.window_size = window_size;
-  sendhdr.probe = 0;
-  sendhdr.fin = 0; 
-
-  Sendmsg(fd, &msgsend, 0);
+static void recvfrom_alarm(int signo){
+	Write(pipefd[1],"",1);	/*Write one null byte data to pipe*/
+	return;
 }
 
 /*** Change Start ***/
 void * read_buffer(void *arg){
 	
 	//printf("Inside thread\n");
-	int mean = 1.5;//*((int *) arg);
+	int mean = *((int *) arg);
 	int bytes_read = 0;	
 	int wait;
+	int i;
 
 	while(1){
 		Pthread_mutex_lock(&buffer_mutex);
-		while(buffer[bytes_read] != 0){
-			printf("%c", buffer[bytes_read]);
-			bytes_read++;
+		for( i = 0; i< (max_win_size - win_size) ; i++){
+			printf("%s",recv_buffer[i]);
+			win_size++;
 		}
-		strcpy(buffer,"");
-		bytes_read = 0;
+		strcpy(recv_buffer[i],"");
 		Pthread_cond_signal(&buffer_cond);
 		Pthread_mutex_unlock(&buffer_mutex);
 		wait = -1*mean*log((rand() %100)/100.0);
-		if(sendhdr.fin == 1)	break;		/*Use FIN to terminate this loop*/
+		if(recvhdr.fin == 1)	break;		/*Use FIN to terminate this loop*/
 		sleep(wait);		
 	}
 }
