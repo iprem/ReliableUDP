@@ -214,8 +214,8 @@ int main(int argc, char **argv){
 		
 			int control = 0;
 			while(1){
-			send.msg_name = 0;
-			send.msg_namelen = sizeof(servaddr);
+			  send.msg_name = 0;
+			  send.msg_namelen = sizeof(servaddr);
 			  send.msg_iov = iovsend;
 			  send.msg_iovlen = 2;
 			  iovsend[0].iov_base = &sendhdr;
@@ -224,13 +224,17 @@ int main(int argc, char **argv){
 			  iovsend[1].iov_len = sizeof(mynewbuf);
 			  
 
-			memset(mynewbuf, 0, sizeof(mynewbuf));
-			printf("Sizeof RECV: %d\n",sizeof(recv));
-			Recvmsg(sockfd, &recv, 0);
-			printf("After Receive\n");
-			if(recvhdr.fin == 1)	break;
-			mynewbuf[strlen(mynewbuf)] = 0;
-			printf("Message received: %s \n", mynewbuf);
+			  memset(mynewbuf, 0, sizeof(mynewbuf));
+			  printf("Sizeof RECV: %d\n",sizeof(recv));
+			  Recvmsg(sockfd, &recv, 0);
+			  printf("After Receive\n");
+			  if(recvhdr.fin == 1)
+			    {
+			      printf("Recieved fin... \n");
+			      break;
+			    }
+			  mynewbuf[strlen(mynewbuf)] = 0;
+			  printf("Message received: \n %s", mynewbuf);
 
 			/*** Change Start ***/
 			/*Pthread_mutex_lock(&buffer_mutex);

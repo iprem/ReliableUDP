@@ -5,23 +5,6 @@
 #include "unprtt.h"
 #include  <setjmp.h>
 
-// connect takes care of "asynchronous" error messages.
-// asynchronous means sendto returns successfully message sent by sendto caused an error .
-// Ex. Server not running
-// pg 249
-
-//recvfrom returns the *from sockaddr
-
-//pselect is explained on pg 181
-//shutdown 172
-
-// race condition with SIGALRM must be avoided
-// see pg 538
-// optimal solution is to use pselect with ipc
-
-//test by using random number generator to automatically drop packets 
-
-//get_ifi_info discussed on pg 469
 
 struct udp_sock_info{
   /*
@@ -79,7 +62,9 @@ static struct hdr {
 #define ACK_SIZE 100
 #define RTT_DEBUG
 #define PAYLOAD_SIZE    512
+
 static int rttinit = 0;
+static int fin_state = 0;
 static struct rtt_info   rttinfo;
 static sigjmp_buf	jmpbuf, jmpbuf_probe, jmpbuf_init_conn;
 
@@ -105,16 +90,14 @@ ssize_t Server_send(int fd, const void *outbuff,  size_t outbytes,
 
 
 int main(int argc, char ** argv){
-  //maybe inintialize to -1
+
   int sock_fd_array[MAX_IF_NUM];
   int * sock_fd_array_iter = sock_fd_array;
   struct udp_sock_info udp_sock_info_arr[MAX_IF_NUM];
   struct udp_sock_info  * udp_sock_info_iter  = udp_sock_info_arr; 
   struct sockaddr_in  server, server_assigned;
   struct sockaddr_in client;
-  struct sockaddr_in ack_client;
-  
-  
+  struct sockaddr_in ack_client;  
   struct udp_sock_info  connected_peer_list[MAX_CONNECTED_PEERS];
   struct udp_sock_info  *connected_peer_iter = connected_peer_list;
   fd_set rset;
@@ -233,9 +216,6 @@ int main(int argc, char ** argv){
       addr_len = sizeof(client);
       readsize =Recvfrom(*sock_fd_array_iter, file_name, 1024,0, (SA *) &client, &addr_len);
       
-      printf("CLIENT: \n");
-      print_sockaddr_in(&client);
-
       file_name[readsize] = 0;
       printf("File name requested: %s\n",file_name);
 
@@ -299,8 +279,6 @@ int main(int argc, char ** argv){
 	exit(1);
       }
       
-     
-      
       int read_amount = 0;
       recvhdr.window_size = 10;
       while (!recvhdr.fin){
@@ -330,13 +308,19 @@ int main(int argc, char ** argv){
 	int cwnd_left = connection.cwnd;
 	while((connection.seq_num <= connection.send_end) && recvhdr.window_size && cwnd_left){
 	  read_amount = fread(payload, (sizeof(payload) -1) , 1, fp1);
-	  if (read_amount == 0)
+	  if (read_amount == 0 && fin_state == 0)
 	    {
-	      payload[0] = '0';
+	      //we have sent a fin
+	      fin_state = 1;
+	      payload[0] = '\0';
 	      Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
 			  &connection, 1);
+	      printf("Payload: %s \n", payload);
+	      printf("Length of final payload: %d \n", strlen(payload));
 	    }
 	  else{
+	    //more data needed so exit fin
+	    fin_state = 0;
 	    payload[sizeof(payload) -1 ] = 0;
 	    Server_send(connfd, payload, strlen(payload), (SA *) &client, sizeof(client), 
 			&connection, 0);
@@ -398,9 +382,6 @@ int main(int argc, char ** argv){
 	while(n = server_recv(connfd))
 	  {
 	    
-	    /* 
-	       DUPLICATE ACK 
-	    */
 
 	    if (recvhdr.fin == 1)
 	      {
@@ -408,6 +389,10 @@ int main(int argc, char ** argv){
 		exit(0);
 	      }
 	      
+	    /* 
+	       DUPLICATE ACK 
+	    */
+
 	    if(recvhdr.seq == connection.last_ack_num)
 	      {
 		connection.dup_ack++;
@@ -800,7 +785,7 @@ ssize_t server_send(int fd, const void *outbuff, size_t outbytes,
   sendhdr.ts = rtt_ts(&rttinfo);
 
   if(flag == 1){
-    sendhdr.fin = 0;
+    sendhdr.fin = 1;
   }
 
   Sendmsg(fd, &msgsend, 0);
