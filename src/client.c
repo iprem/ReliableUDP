@@ -76,8 +76,7 @@ int main(int argc, char **argv){
 	family = AF_INET;
 
 	/*Print information of all interfaces*/	
-	//WHERE IS THIS FUNCTION?
-	//prifinfo_plus(family, doaliases);
+	prifinfo_plus(family, doaliases);
 
 	ifi = Get_ifi_info_plus(family, doaliases);
 	while((ifi = ifi->ifi_next) != NULL ){
