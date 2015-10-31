@@ -1,0 +1,29 @@
+RTT and RTO
+-------------
+
+I changed the existing functions provided by Stevens in his rtt.c file to use integral operations. 
+I also changed his code to deal exclusively in milliseconds. 
+
+RELIABILITY
+------------
+
+I exactly copied TCP Reno's methods. I used a sliding sender window for unacked segments, cumulative acks, and fast retransmit for triple duplicate acks.
+
+
+FLOW CONTROL / CONGESTION CONTROL
+---------------------------------------------
+
+Slow start is implemented- exponential growth until ssthresh, linear after.
+The sender/server cannot send more than min(receive_window, congestion_window, sender_window) at a time. 
+If there is a timeout then cwnd is set to 1, exponential growth to ssthresh (1/2 cwnd) and linear after.
+If there is a triple duplicate ack then cwnd is cut in half, ssthresh is set to cwnd, and linear growth. 
+A persistent driving timer is used to query the client at intervals that double as per the RTO calculation. 
+	The initial timeout value is set to the RTO at the time that the persistent timer starts.
+
+
+
+
+
+
+
+
